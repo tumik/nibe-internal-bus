@@ -1,0 +1,12 @@
+{
+  "domain": "nibe_internal_bus",
+  "name": "Nibe Internal Bus",
+  "codeowners": ["@tumik"],
+  "config_flow": true,
+  "documentation": "https://github.com/tumik/nibe-internal-bus",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/tumik/nibe-internal-bus/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}

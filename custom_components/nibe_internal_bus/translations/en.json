@@ -1,0 +1,78 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to nibegw",
+        "description": "Enter the address of the ESP32 running the esphome-nibe `nibegw` component \u2014 not the heat pump itself. Home Assistant registers itself as a UDP forwarding target and only listens; it never writes to the RS-485 bus.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the ESP32 running esphome-nibe.",
+          "port": "The nibegw `read_port`, 9999 unless you changed it."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No data arrived from that address. Check the IP and port, and that the device is on the same network.",
+      "no_valid_frames": "The device replied, but nothing it sent parsed as a NibeGW frame. Check that the RS-485 wiring is connected and the UART is configured.",
+      "no_pump_data": "NibeGW frames arrived, but none from bus address 00F5. Only the F1226's internal bus has been tested so far."
+    },
+    "abort": {
+      "already_configured": "This nibegw device is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "data": {
+          "push_interval": "Update interval (seconds)"
+        },
+        "data_description": {
+          "push_interval": "How often temperatures and pump speeds are written to Home Assistant. The bus itself cycles about once a second; a short interval fills the recorder database quickly. Relay states and the operating mode always update immediately."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "bt1_outdoor": { "name": "Outdoor temperature (BT1)" },
+      "bt7_hot_water_top": { "name": "Hot water top (BT7)" },
+      "bt6_hot_water_bottom": { "name": "Hot water bottom (BT6)" },
+      "bt2_supply": { "name": "Supply line (BT2)" },
+      "bt12_condenser_out": { "name": "Condenser out (BT12)" },
+      "bt3_return": { "name": "Return line (BT3)" },
+      "bt11_brine_out": { "name": "Brine out (BT11)" },
+      "bt10_brine_in": { "name": "Brine in (BT10)" },
+      "bt14_hot_gas": { "name": "Hot gas (BT14)" },
+      "bt17_suction_gas": { "name": "Suction gas (BT17)" },
+      "bt15_liquid_line": { "name": "Liquid line (BT15)" },
+      "gp1_speed": { "name": "Heating pump speed (GP1)" },
+      "gp2_speed": { "name": "Brine pump speed (GP2)" },
+      "three_way_valve": {
+        "name": "Three-way valve",
+        "state": {
+          "heating": "Heating",
+          "hot_water": "Hot water"
+        }
+      },
+      "operating_mode": {
+        "name": "Operating mode",
+        "state": {
+          "heating_idle": "Heating or idle",
+          "hot_water": "Hot water"
+        }
+      },
+      "relays_raw": { "name": "Relay bitmask (PCA-Base)" },
+      "gp1_duty_raw": { "name": "GP1 raw duty byte" },
+      "last_frame": { "name": "Last bus frame" }
+    },
+    "binary_sensor": {
+      "compressor": { "name": "Compressor" },
+      "heating_pump": { "name": "Heating circulation pump" },
+      "brine_pump": { "name": "Brine pump" }
+    }
+  }
+}

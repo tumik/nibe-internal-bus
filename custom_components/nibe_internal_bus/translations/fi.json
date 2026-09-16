@@ -1,0 +1,78 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Yhdistä nibegw-laitteeseen",
+        "description": "Anna sen ESP32:n osoite, jossa esphome-nibe -komponentti `nibegw` toimii \u2014 ei siis lämpöpumpun osoitetta. Home Assistant rekisteröityy laitteelle UDP-kohteeksi ja ainoastaan kuuntelee; se ei koskaan kirjoita RS-485-väylälle.",
+        "data": {
+          "host": "Osoite",
+          "port": "Portti"
+        },
+        "data_description": {
+          "host": "Sen ESP32:n IP-osoite tai verkkonimi, jossa esphome-nibe toimii.",
+          "port": "Asetuksen `read_port` arvo, oletuksena 9999."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Osoitteesta ei tullut lainkaan dataa. Tarkista IP-osoite ja portti sekä se, että laite on samassa verkossa.",
+      "no_valid_frames": "Laite vastasi, mutta mikään sen lähettämä ei jäsentynyt NibeGW-sanomaksi. Tarkista RS-485-kytkennät ja UART-asetukset.",
+      "no_pump_data": "NibeGW-sanomia saapui, mutta yhtäkään ei väyläosoitteesta 00F5. Toistaiseksi on testattu vain F1226:n sisäistä väylää."
+    },
+    "abort": {
+      "already_configured": "Tämä nibegw-laite on jo määritetty."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Asetukset",
+        "data": {
+          "push_interval": "Päivitysväli (sekuntia)"
+        },
+        "data_description": {
+          "push_interval": "Kuinka usein lämpötilat ja pumppujen nopeudet kirjoitetaan Home Assistantiin. Väylä itse kiertää noin kerran sekunnissa, joten lyhyt väli kasvattaa tallennustietokantaa nopeasti. Releiden tilat ja toimintatila päivittyvät aina välittömästi."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "bt1_outdoor": { "name": "Ulkolämpötila (BT1)" },
+      "bt7_hot_water_top": { "name": "Käyttövesi ylä (BT7)" },
+      "bt6_hot_water_bottom": { "name": "Käyttövesi ala (BT6)" },
+      "bt2_supply": { "name": "Menolämpötila (BT2)" },
+      "bt12_condenser_out": { "name": "Lauhduttimen meno (BT12)" },
+      "bt3_return": { "name": "Paluulämpötila (BT3)" },
+      "bt11_brine_out": { "name": "Keruupiirin meno (BT11)" },
+      "bt10_brine_in": { "name": "Keruupiirin tulo (BT10)" },
+      "bt14_hot_gas": { "name": "Kuumakaasu (BT14)" },
+      "bt17_suction_gas": { "name": "Imukaasu (BT17)" },
+      "bt15_liquid_line": { "name": "Nestejohto (BT15)" },
+      "gp1_speed": { "name": "Lämmityspumpun nopeus (GP1)" },
+      "gp2_speed": { "name": "Keruupumpun nopeus (GP2)" },
+      "three_way_valve": {
+        "name": "Vaihtoventtiili",
+        "state": {
+          "heating": "Lämmitys",
+          "hot_water": "Käyttövesi"
+        }
+      },
+      "operating_mode": {
+        "name": "Toimintatila",
+        "state": {
+          "heating_idle": "Lämmitys tai valmiustila",
+          "hot_water": "Käyttövesi"
+        }
+      },
+      "relays_raw": { "name": "Releiden bittimaski (PCA-Base)" },
+      "gp1_duty_raw": { "name": "GP1:n raaka ohjausarvo" },
+      "last_frame": { "name": "Viimeisin väyläsanoma" }
+    },
+    "binary_sensor": {
+      "compressor": { "name": "Kompressori" },
+      "heating_pump": { "name": "Lämmityspiirin kiertopumppu" },
+      "brine_pump": { "name": "Keruupiirin pumppu" }
+    }
+  }
+}
