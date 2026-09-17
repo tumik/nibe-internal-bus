@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -23,8 +22,9 @@ from .const import (
     FIELD_OPERATING_MODE,
     FIELD_RELAYS_RAW,
     FIELD_THREE_WAY_VALVE,
-    MODE_HEATING_IDLE,
+    MODE_HEATING,
     MODE_HOT_WATER,
+    MODE_STANDBY,
     VALVE_HEATING,
     VALVE_HOT_WATER,
 )
@@ -91,7 +91,7 @@ SENSORS: tuple[NibeSensorDescription, ...] = (
         key="operating_mode",
         field_id=FIELD_OPERATING_MODE,
         device_class=SensorDeviceClass.ENUM,
-        options=[MODE_HEATING_IDLE, MODE_HOT_WATER],
+        options=[MODE_STANDBY, MODE_HEATING, MODE_HOT_WATER],
     ),
     NibeSensorDescription(
         key="relays_raw",
@@ -105,11 +105,6 @@ SENSORS: tuple[NibeSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-    ),
-    NibeSensorDescription(
-        key="last_frame",
-        device_class=SensorDeviceClass.TIMESTAMP,
-        entity_category=EntityCategory.DIAGNOSTIC,
     ),
 )
 
@@ -157,9 +152,6 @@ class NibeInternalBusSensor(NibeInternalBusEntity, SensorEntity):
     @property
     def native_value(self) -> Any:
         """Return the decoded value."""
-        if self.entity_description.key == "last_frame":
-            return self.coordinator.last_datagram_utc
-
         value = self.coordinator.values.get(self._field_id)
         if value is None:
             return None
@@ -169,13 +161,3 @@ class NibeInternalBusSensor(NibeInternalBusEntity, SensorEntity):
         if convert := PERCENT_FROM_DUTY.get(self.entity_description.key):
             return convert(int(value))
         return value
-
-    @property
-    def extra_state_attributes(self) -> dict[str, datetime | int] | None:
-        """Expose bus statistics on the diagnostic timestamp sensor."""
-        if self.entity_description.key != "last_frame":
-            return None
-        return {
-            "checksum_errors": self.coordinator.checksum_errors,
-            "frames_decoded": sum(self.coordinator.frame_counts.values()),
-        }

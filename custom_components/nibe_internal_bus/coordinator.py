@@ -27,14 +27,15 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     BUS_ADDRESS,
-    CMD_PRIO_HEATING,
-    CMD_PRIO_HOT_WATER,
     DISCRETE_FIELDS,
     DOMAIN,
+    FIELD_COMPRESSOR,
     FIELD_OPERATING_MODE,
+    FIELD_THREE_WAY_VALVE,
     KEEPALIVE_INTERVAL,
-    MODE_HEATING_IDLE,
+    MODE_HEATING,
     MODE_HOT_WATER,
+    MODE_STANDBY,
     PROBE_TIMEOUT,
     STALE_AFTER,
 )
@@ -42,6 +43,13 @@ from .decoder import decode_frame
 from .protocol import TRIGGER_PACKET, parse_frames
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def operating_mode(compressor: int, valve: int) -> str:
+    """Map the relay bits to the mode the pump is actually in."""
+    if not compressor:
+        return MODE_STANDBY
+    return MODE_HOT_WATER if valve else MODE_HEATING
 
 
 class CannotConnect(Exception):
@@ -231,7 +239,7 @@ class NibeInternalBusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.values[field_id] = value
                 self._seen[field_id] = now
 
-            publish_now |= self._handle_derived(frame, now)
+            publish_now |= self._handle_derived()
 
         if self.values and not self._first_data.is_set():
             self._first_data.set()
@@ -241,24 +249,23 @@ class NibeInternalBusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._publish()
 
     @callback
-    def _handle_derived(self, frame, now: float) -> bool:
-        """Decode the values that are not carried in any payload.
+    def _handle_derived(self) -> bool:
+        """Derive the operating mode, which no payload carries directly.
 
-        `Prio` is not transmitted as a value anywhere on this bus -- it is
-        encoded in *which* command the master polls: 0x96 while heating or
-        idle, 0x99 during hot water production. Prio 30 has never been
-        observed, so an unrecognised poll leaves the mode alone.
+        The compressor bit says whether the pump is producing anything at all,
+        and the 3-way valve says where that production goes. The polled
+        command (0x96 / 0x99) only tracks compressor state, not demand: 0x99
+        was polled throughout a 30 minute run with the valve set to heating.
         """
-        changed = False
+        if FIELD_COMPRESSOR not in self._seen:
+            return False
 
-        if frame.cmd in (CMD_PRIO_HEATING, CMD_PRIO_HOT_WATER):
-            mode = (
-                MODE_HEATING_IDLE if frame.cmd == CMD_PRIO_HEATING else MODE_HOT_WATER
-            )
-            changed = self.values.get(FIELD_OPERATING_MODE) != mode
-            self.values[FIELD_OPERATING_MODE] = mode
-            self._seen[FIELD_OPERATING_MODE] = now
-
+        mode = operating_mode(
+            self.values[FIELD_COMPRESSOR], self.values[FIELD_THREE_WAY_VALVE]
+        )
+        changed = self.values.get(FIELD_OPERATING_MODE) != mode
+        self.values[FIELD_OPERATING_MODE] = mode
+        self._seen[FIELD_OPERATING_MODE] = self._seen[FIELD_COMPRESSOR]
         return changed
 
     @callback

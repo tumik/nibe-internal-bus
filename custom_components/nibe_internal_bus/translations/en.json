@@ -61,13 +61,13 @@
       "operating_mode": {
         "name": "Operating mode",
         "state": {
-          "heating_idle": "Heating or idle",
+          "standby": "Standby",
+          "heating": "Heating",
           "hot_water": "Hot water"
         }
       },
       "relays_raw": { "name": "Relay bitmask (PCA-Base)" },
-      "gp1_duty_raw": { "name": "GP1 raw duty byte" },
-      "last_frame": { "name": "Last bus frame" }
+      "gp1_duty_raw": { "name": "GP1 raw duty byte" }
     },
     "binary_sensor": {
       "compressor": { "name": "Compressor" },

@@ -25,11 +25,8 @@ PROBE_TIMEOUT = 15
 # The only bus address this integration decodes.
 BUS_ADDRESS = 0x00F5
 
-# Commands the master alternates between to signal the active demand.
-CMD_PRIO_HEATING = 0x96
-CMD_PRIO_HOT_WATER = 0x99
-
-MODE_HEATING_IDLE = "heating_idle"
+MODE_STANDBY = "standby"
+MODE_HEATING = "heating"
 MODE_HOT_WATER = "hot_water"
 
 VALVE_HEATING = "heating"

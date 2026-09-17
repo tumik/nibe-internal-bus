@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from custom_components.nibe_internal_bus.binary_sensor import BINARY_SENSORS
+from custom_components.nibe_internal_bus.coordinator import operating_mode
 from custom_components.nibe_internal_bus.decoder import (
     ADC_MAX,
     decode_frame,
@@ -95,6 +96,7 @@ def test_duty_converts_to_percent(
     ("payload", "relays", "bits"),
     [
         ("02 04", 2, (0, 1, 0, 0)),
+        ("07 0c", 7, (1, 1, 1, 0)),
         ("0f 0c", 15, (1, 1, 1, 1)),
     ],
 )
@@ -129,3 +131,24 @@ def test_every_entity_field_id_is_produced_by_the_decoder() -> None:
         if field_id is None or field_id.startswith("derived_"):
             continue
         assert field_id in known, f"{description.key} reads an undecoded field"
+
+
+# Relay bytes taken from the capture: 2 = idle, 7 = heating run, 15 = hot water.
+@pytest.mark.parametrize(
+    ("payload", "mode"),
+    [
+        ("02 04", "standby"),
+        ("0a 04", "standby"),
+        ("07 0c", "heating"),
+        ("0f 0c", "hot_water"),
+    ],
+)
+def test_operating_mode_follows_the_relay_bits(payload: str, mode: str) -> None:
+    values = decode_frame(frame(MASTER, 0x55, payload))
+
+    assert (
+        operating_mode(
+            values["00F5_MASTER_55_byte0bit0"], values["00F5_MASTER_55_byte0bit3"]
+        )
+        == mode
+    )

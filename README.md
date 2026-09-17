@@ -162,9 +162,15 @@ to within the ADC quantisation floor. They are not approximations.
 | Heating circulation pump | `MASTER 0x55` byte 0 bit 1 |
 | Brine pump | `MASTER 0x55` byte 0 bit 2 |
 | Three-way valve | `MASTER 0x55` byte 0 bit 3 |
-| Operating mode | which command the master polls, `0x96` or `0x99` |
+| Operating mode | derived from `MASTER 0x55` byte 0, bits 0 and 3 |
 | Relay bitmask (PCA-Base) | `MASTER 0x55` byte 0 — diagnostic, disabled by default |
-| Last bus frame | timestamp of the last datagram — diagnostic |
+
+There is deliberately no "last frame received" entity. Its value changes on
+every bus cycle, which would write a database row every few seconds for
+something that has no useful history. Liveness is already visible in the
+entities themselves — they go unavailable once the bus goes quiet — and the
+exact timestamp, frame counts and checksum error count are in the integration's
+diagnostics download.
 
 ---
 
@@ -239,25 +245,31 @@ diagnostic entity, so a future recalibration can be done from recorder history.
 | 2 | Brine (collector) pump |
 | 3 | Three-way valve — 0 = heating, 1 = hot water |
 
-Observed values are `2` (idle: circulation only) and `15` (hot water: everything
-on, valve diverted).
+Observed values are `2` (idle: circulation only), `7` (heating: compressor and
+brine pump on, valve undiverted) and `15` (hot water: everything on, valve
+diverted).
 
-### Operating mode is in the command byte, not in a payload
+### Operating mode is derived from the relay bits
 
-`Prio` is **not transmitted as a value anywhere on this bus.** It is encoded
-structurally, in three redundant places at once:
+`Prio` is **not transmitted as a value anywhere on this bus**, so the mode is
+reconstructed from the two bits that say whether the pump is producing anything
+and where that production is going:
 
-| Encoding | Prio 10 (heating/idle) | Prio 20 (hot water) |
+| Compressor (bit 0) | Valve (bit 3) | Mode |
 | --- | --- | --- |
-| which command the master polls | `0x96` | `0x99` |
-| that command's one-byte reply | `05` | `06` |
-| `0x55` byte 1 | `4` | `12` |
-| `0x55` byte 0 bit 3 (valve) | `0` | `1` |
+| 0 | either | Standby |
+| 1 | 0 | Heating |
+| 1 | 1 | Hot water |
 
-This integration reads the first of these. The `0x96`/`0x99` split partitions
-all 16126 captured seconds cleanly, 8690 / 7228. Prio 30 (active heating demand)
-was never observed, so an unrecognised poll leaves the mode unchanged rather
-than being forced into one of the two known states.
+The command the master polls — `0x96` or `0x99` — looks like it encodes this,
+but it does not. It tracks the *compressor*, not the demand: across a 29 hour
+capture the master polled `0x99` continuously through two half-hour runs with
+byte 0 = `7`, i.e. compressor on with the valve set to heating, which is the
+same command it polls during hot water production. `0x55` byte 1 behaves the
+same way, reading `12` whenever the compressor runs and `4` otherwise.
+
+A shorter earlier capture contained only idle and hot-water periods, which made
+the `0x96`/`0x99` split look like a heating/hot-water distinction.
 
 ### Confidence
 
