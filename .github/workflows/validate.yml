@@ -31,3 +31,41 @@ jobs:
       - run: pip install -r requirements_test.txt
       - run: ruff check .
       - run: pytest
+
+  release:
+    needs: [hassfest, hacs, tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    concurrency: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump patch version in manifest.json
+        id: bump
+        run: |
+          python - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, pathlib, re
+
+          path = pathlib.Path("custom_components/nibe_internal_bus/manifest.json")
+          text = path.read_text()
+          major, minor, patch = (int(p) for p in json.loads(text)["version"].split("."))
+          version = f"{major}.{minor}.{patch + 1}"
+          path.write_text(re.sub(r'("version":\s*")[^"]*"', rf'\g<1>{version}"', text))
+          print(f"version={version}")
+          EOF
+
+      - name: Commit, tag and release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release $VERSION"
+          git tag "v$VERSION"
+          git push origin HEAD:master "v$VERSION"
+          gh release create "v$VERSION" --title "v$VERSION" --generate-notes
