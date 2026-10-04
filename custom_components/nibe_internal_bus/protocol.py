@@ -7,6 +7,11 @@ standalone.
 Each UDP datagram forwarded by the ESP32 is one complete bus cycle: a master
 ("response", start byte 0x5C) frame, optionally followed by the accessory's
 slave ("request", start byte 0xC0) reply, and a trailing ACK/NAK byte.
+
+A 0x5C inside a payload is sent doubled as ``5C 5C`` so it cannot be mistaken
+for a frame start. The length byte and the checksum both count the bytes as
+sent, doubling included, so frames are cut and checked on the raw bytes and
+only the payload handed onwards is unescaped.
 """
 
 from __future__ import annotations
@@ -59,13 +64,21 @@ def build_trigger_packet() -> bytes:
 
 TRIGGER_PACKET: Final = build_trigger_packet()
 
+_ESCAPED_START: Final = bytes([START_MASTER, START_MASTER])
+
+
+def unescape(payload: bytes) -> bytes:
+    """Collapse each doubled ``5C 5C`` in a payload back into one 0x5C."""
+    return payload.replace(_ESCAPED_START, bytes([START_MASTER]))
+
 
 def parse_frames(data: bytes) -> list[Frame]:
     """Split one UDP datagram into its individual frames.
 
     Master frames checksum the bytes *after* the start byte; slave frames
     include it. Slave frames carry no address of their own -- they inherit it
-    from the master frame that preceded them in the same datagram.
+    from the master frame that preceded them in the same datagram. Each
+    frame's ``data`` is the unescaped payload.
 
     ACK/NAK/noise bytes and truncated tails are discarded. Frames that fail
     their checksum are returned with ``checksum_ok=False`` so the caller can
@@ -90,7 +103,7 @@ def parse_frames(data: bytes) -> list[Frame]:
                     direction=MASTER,
                     address=address,
                     cmd=cmd,
-                    data=data[pos + 5 : end],
+                    data=unescape(data[pos + 5 : end]),
                     checksum_ok=data[end] == xor8(data[pos + 1 : end]),
                 )
             )
@@ -106,7 +119,7 @@ def parse_frames(data: bytes) -> list[Frame]:
                     direction=SLAVE,
                     address=last_address,
                     cmd=cmd,
-                    data=data[pos + 3 : end],
+                    data=unescape(data[pos + 3 : end]),
                     checksum_ok=data[end] == xor8(data[pos:end]),
                 )
             )

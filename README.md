@@ -137,8 +137,8 @@ EP14 cooling module's set in `SLAVE 0x91`.
 | Supply line (BT2) | `90` slot 3 | 40008 |
 | Condenser out (BT12) | `91` slot 0 | 40017 |
 | Return line (BT3) | `91` slot 1 | 40012 |
-| Brine out (BT11) | `91` slot 2 | 40015 |
-| Brine in (BT10) | `91` slot 3 | 40016 |
+| Brine out (BT11) | `91` slot 2 | 40016 |
+| Brine in (BT10) | `91` slot 3 | 40015 |
 | Hot gas (BT14) | `91` slot 4 | 40018 |
 | Suction gas (BT17) | `91` slot 5 | 40022 |
 | Liquid line (BT15) | `91` slot 6 | *not exported* |
@@ -162,8 +162,29 @@ to within the ADC quantisation floor. They are not approximations.
 | Heating circulation pump | `MASTER 0x55` byte 0 bit 1 |
 | Brine pump | `MASTER 0x55` byte 0 bit 2 |
 | Three-way valve | `MASTER 0x55` byte 0 bit 3 |
-| Operating mode | derived from `MASTER 0x55` byte 0, bits 0 and 3 |
+| Operating mode | derived from the compressor, electrical addition and valve bits |
 | Relay bitmask (PCA-Base) | `MASTER 0x55` byte 0 — diagnostic, disabled by default |
+| Relay bitmask byte 1 | `MASTER 0x55` byte 1 — diagnostic, disabled by default |
+| Relay byte 1 bit 2 / bit 3 | `MASTER 0x55` byte 1 bits 2 and 3, meaning unknown — diagnostic, disabled by default |
+| Status reply 0x96 / 0x99 | `SLAVE 0x96` / `0x99` byte 0, meaning unknown — diagnostic, disabled by default |
+
+### Electrical addition
+
+| Entity | Source |
+| --- | --- |
+| Electrical addition | on when any addition relay is |
+| Electrical addition power | sum of the switched-in relays' ratings, kW |
+| Electrical addition energy | the power integrated over time, kWh |
+| Electrical addition relay 1 kW, 2 kW A / B / C | `MASTER 0x55` byte 1 bit 1, byte 0 bit 6, byte 1 bit 0, byte 0 bit 4 — diagnostic, disabled by default |
+
+The power is the relays' **nominal** rating, not a measurement, but it equals
+the pump's own *Tot.Int.Add* (43084) on every row of its USB log export.
+
+The energy sensor is meant for the Energy dashboard and needs no helper. It is
+integrated here rather than left to a Riemann sum helper because the power is
+a step function known exactly at every relay change, so the integral is exact.
+The total survives restarts; time while Home Assistant is down, or while the
+bus has been silent for over 60 seconds, is not counted.
 
 There is deliberately no "last frame received" entity. Its value changes on
 every bus cycle, which would write a database row every few seconds for
@@ -175,6 +196,11 @@ diagnostics download.
 ---
 
 ## How the values are interpreted
+
+Framing, byte stuffing and everything known per command are written up in
+[docs/protocol.md](docs/protocol.md). The one framing detail that affects
+values: a `0x5C` byte inside a payload is sent doubled, and must be collapsed
+back before the payload is read, or every ADC slot after it shifts by a byte.
 
 ### Temperatures are raw 10-bit ADC counts, not scaled numbers
 
@@ -221,73 +247,96 @@ input. Slots 4–7 of the `0x90` reply and slot 7 of `0x91` are in this category
 ### Pump speeds are inverted PWM duty
 
 Both bytes of the `MASTER 0xA0` payload are **duty commands, inverted** — a
-bigger byte means a *slower* pump. This is the normal Grundfos/Wilo "profile A"
-convention.
+bigger byte means a *slower* pump, and `0x64` (100 %) stops it. This is the
+normal Grundfos/Wilo "profile A" convention.
 
 ```
 GP2 % = 100 − byte1
-GP1 % = (800 − 10·byte0) / 7   # unverified
+GP1 %: interpolated between the known settings below; 0 at 0x64 (stopped)
 ```
 
-GP2 is exact. **GP1's scale is unverified** — it is a fit to the only two speeds
-the pump has been observed using, and any straight line fits two points. The raw
-byte is therefore also available as the disabled-by-default **GP1 raw duty byte**
-diagnostic entity, so a future recalibration can be done from recorder history.
+| GP1 byte | `0x20` | `0x2D` | `0x34` | `0x3B` | `0x64` |
+| --- | --- | --- | --- | --- | --- |
+| GP1 % | 70 | 50 | 40 | 30 | stopped |
+
+GP2 is exact. GP1's settings do not lie on one straight line — the earlier
+single-line fit read 70 % as 68.6 % and a stopped pump as −28.6 % — so speeds
+between the known settings are interpolated. All the known settings match the
+pump's own *GP1-speed* (43437). The raw byte is also available as the
+disabled-by-default **GP1 raw duty byte** diagnostic entity, so further settings
+can be added from recorder history.
 
 ### Relay bits
 
-`MASTER 0x55` byte 0, LSB first:
+`MASTER 0x55`, LSB first. Byte 0 is the pump's own *Relays PCA-Base* (43514).
 
-| Bit | Meaning |
-| --- | --- |
-| 0 | Compressor |
-| 1 | Heating circuit pump |
-| 2 | Brine (collector) pump |
-| 3 | Three-way valve — 0 = heating, 1 = hot water |
+| Byte | Bit | Meaning |
+| --- | --- | --- |
+| 0 | 0 | Compressor |
+| 0 | 1 | Heating circuit pump |
+| 0 | 2 | Brine (collector) pump |
+| 0 | 3 | Three-way valve — 0 = heating, 1 = hot water |
+| 0 | 4 | Electrical addition 2 kW (C) |
+| 0 | 6 | Electrical addition 2 kW (A) |
+| 1 | 0 | Electrical addition 2 kW (B) |
+| 1 | 1 | Electrical addition 1 kW |
+| 1 | 2 | Unknown, always set |
+| 1 | 3 | Unknown, set exactly when the brine pump runs |
 
-Observed values are `2` (idle: circulation only), `7` (heating: compressor and
-brine pump on, valve undiverted) and `15` (hot water: everything on, valve
-diverted).
+Common values are `02 04` (idle: circulation only), `07 0C` (heating:
+compressor and brine pump on, valve undiverted) and `0F 0C` (hot water:
+everything on, valve diverted).
+
+The pump steps the electrical addition up as 1, 2 (A), 2+1, 2+2 (A+B), 2+2+1
+and 2+2+2 (A+B+C) kW, so
+
+```
+kW = 1·bit(1.1) + 2·bit(0.6) + 2·bit(1.0) + 2·bit(0.4)
+```
 
 ### Operating mode is derived from the relay bits
 
 `Prio` is **not transmitted as a value anywhere on this bus**, so the mode is
-reconstructed from the two bits that say whether the pump is producing anything
-and where that production is going:
+reconstructed from the bits that say whether the pump is producing anything
+and where that production is going. The electrical addition sits before the
+three-way valve, so it heats whichever side the valve feeds, with or without
+the compressor:
 
-| Compressor (bit 0) | Valve (bit 3) | Mode |
+| Compressor (0.0) or electrical addition on | Valve (0.3) | Mode |
 | --- | --- | --- |
-| 0 | either | Standby |
-| 1 | 0 | Heating |
-| 1 | 1 | Hot water |
+| no | either | Standby |
+| yes | 0 | Heating |
+| yes | 1 | Hot water |
 
 The command the master polls — `0x96` or `0x99` — looks like it encodes this,
 but it does not. It tracks the *compressor*, not the demand: across a 29 hour
 capture the master polled `0x99` continuously through two half-hour runs with
 byte 0 = `7`, i.e. compressor on with the valve set to heating, which is the
-same command it polls during hot water production. `0x55` byte 1 behaves the
-same way, reading `12` whenever the compressor runs and `4` otherwise.
+same command it polls during hot water production. `0x55` byte 1 bit 3 behaves
+similarly: it follows the brine pump, which runs with the compressor.
 
 A shorter earlier capture contained only idle and hot-water periods, which made
 the `0x96`/`0x99` split look like a heating/hot-water distinction.
 
 ### Confidence
 
-Two values are marked **candidate** rather than confirmed, and are enabled
-anyway:
+One value is marked **candidate** rather than confirmed, and is enabled anyway:
 
-- **GP1 speed** — scale is unverified (see above).
 - **Liquid line (BT15)** — `0x91` slot 6 behaves exactly like a real sensor, and
   BT15 is the one EP14 sensor missing from the list, but it is absent from the
   pump's USB log export so it can never be checked against ground truth.
+
+GP1 speed is exact only at the settings in the table above; in between it is an
+interpolation.
 
 ### Update rate and availability
 
 The bus cycles about once per second, which is far too fast to write into the
 recorder. Temperatures and pump speeds are published on a timer (15 s by
-default, 5–60 s in the integration's options). Relay bits, the valve and the
-operating mode are published **the instant they change**, so compressor starts
-are not delayed.
+default, 5–60 s in the integration's options). Relay bits, the valve, the
+operating mode, the electrical addition and the `0x96`/`0x99` status replies
+are published **the instant they change**, so compressor starts are not delayed
+and short-lived states are not missed.
 
 An entity becomes `unavailable` when the frame carrying it has not been seen for
 60 seconds, or when its sensor reads open-circuit. Registration is maintained
@@ -306,12 +355,16 @@ Still unidentified on this bus, and deliberately left out:
 - **`cmd 0x85`, `cmd 0xEF`** — `0xEF` replies `0x0E` about every 40 s.
 - **Address `00FC` cmd `0x55`** — payload is a constant `0xFF`, in bursts of
   three every ~5 s.
-- **`0x55` byte 1 bit 2** — set in both known states.
+- **`0x55` byte 1 bits 2 and 3** — bit 2 is always set, bit 3 follows the brine
+  pump. Exposed raw as diagnostics.
+- **`cmd 0x96` / `0x99` replies** — normally `05` / `06`, flipping for a few
+  seconds around compressor stops and starts. Exposed raw as diagnostics.
 
 ## Where the decoding rules live
 
 [`custom_components/nibe_internal_bus/fields.py`](custom_components/nibe_internal_bus/fields.py)
-says where each value sits on the bus. Entity metadata — translation keys,
+says where each value sits on the bus; [docs/protocol.md](docs/protocol.md)
+says why. Entity metadata — translation keys,
 device classes, units — lives in `sensor.py` and `binary_sensor.py` and is joined
 to those rules by a field identifier derived from each rule's position on the
 bus, for example `00F5_SLAVE_91_ntc4`.
@@ -322,6 +375,13 @@ bus, for example `00F5_SLAVE_91_ntc4`.
 pip install -r requirements_test.txt
 pytest
 ```
+
+To capture raw bus traffic, for example to decode something new or to report
+another model, uncomment the `packages:` include of
+[`esphome/uart-debug.yaml`](esphome/uart-debug.yaml) in the ESPHome config and
+reflash. Every received byte then appears in the device log as hex. Remove the
+include again afterwards: it logs about ten lines a second. Capturing alongside
+the pump's own USB log (menu 7.2) gives ground truth to compare against.
 
 ## License
 

@@ -1,6 +1,6 @@
 """Binary sensors for the Nibe relay outputs.
 
-All three come from bit positions in byte 0 of the MASTER 0x55 frame. Bit 3 is
+All of these come from bit positions in the MASTER 0x55 frame. Byte 0 bit 3 is
 the 3-way valve, which is exposed as an enum sensor instead.
 """
 
@@ -13,11 +13,23 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
     BinarySensorEntityDescription,
 )
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NibeInternalBusConfigEntry
-from .const import FIELD_BRINE_PUMP, FIELD_COMPRESSOR, FIELD_HEATING_PUMP
+from .const import (
+    FIELD_ADDITION_1KW,
+    FIELD_ADDITION_2KW_A,
+    FIELD_ADDITION_2KW_B,
+    FIELD_ADDITION_2KW_C,
+    FIELD_ADDITION_POWER,
+    FIELD_BRINE_PUMP,
+    FIELD_COMPRESSOR,
+    FIELD_HEATING_PUMP,
+    FIELD_RELAYS_BYTE1_BIT2,
+    FIELD_RELAYS_BYTE1_BIT3,
+)
 from .coordinator import NibeInternalBusCoordinator
 from .entity import NibeInternalBusEntity
 
@@ -27,6 +39,16 @@ class NibeBinarySensorDescription(BinarySensorEntityDescription):
     """Describes a binary sensor and the bus field behind it."""
 
     field_id: str
+
+
+def _diagnostic(key: str, field_id: str) -> NibeBinarySensorDescription:
+    """A single relay bit kept for further research, disabled by default."""
+    return NibeBinarySensorDescription(
+        key=key,
+        field_id=field_id,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+    )
 
 
 BINARY_SENSORS: tuple[NibeBinarySensorDescription, ...] = (
@@ -45,6 +67,18 @@ BINARY_SENSORS: tuple[NibeBinarySensorDescription, ...] = (
         field_id=FIELD_BRINE_PUMP,
         device_class=BinarySensorDeviceClass.RUNNING,
     ),
+    # On whenever any addition relay is, i.e. the derived power is non-zero.
+    NibeBinarySensorDescription(
+        key="electrical_addition",
+        field_id=FIELD_ADDITION_POWER,
+        device_class=BinarySensorDeviceClass.RUNNING,
+    ),
+    _diagnostic("addition_relay_1kw", FIELD_ADDITION_1KW),
+    _diagnostic("addition_relay_2kw_a", FIELD_ADDITION_2KW_A),
+    _diagnostic("addition_relay_2kw_b", FIELD_ADDITION_2KW_B),
+    _diagnostic("addition_relay_2kw_c", FIELD_ADDITION_2KW_C),
+    _diagnostic("relays_byte1_bit2", FIELD_RELAYS_BYTE1_BIT2),
+    _diagnostic("relays_byte1_bit3", FIELD_RELAYS_BYTE1_BIT3),
 )
 
 

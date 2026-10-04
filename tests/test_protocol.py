@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from custom_components.nibe_internal_bus.protocol import (
     MASTER,
     SLAVE,
@@ -66,3 +68,48 @@ def test_truncated_tail_is_discarded() -> None:
 
 def test_ack_and_noise_bytes_do_not_produce_frames() -> None:
     assert parse_frames(bytes([0x06, 0x15, 0x00, 0xFF])) == []
+
+
+# Captured off the bus. A 0x5C in the payload goes out doubled, and both the
+# length byte (0x11 for 16 payload bytes) and the checksum count the doubling.
+@pytest.mark.parametrize(
+    ("datagram", "payload"),
+    [
+        (
+            "5c 00 f5 91 00 64"
+            " c0 91 11 5c 5c 01 91 01 6e 03 5d 03 86 00 41 03 8d 01 01 00 ab 06",
+            "5c 01 91 01 6e 03 5d 03 86 00 41 03 8d 01 01 00",
+        ),
+        (
+            "5c 00 f5 90 00 65"
+            " c0 90 11 35 03 96 01 b9 01 5c 5c 01 ff 03 01 00 ff 03 ff 03 a4 06",
+            "35 03 96 01 b9 01 5c 01 ff 03 01 00 ff 03 ff 03",
+        ),
+    ],
+)
+def test_doubled_start_byte_in_a_payload_is_unescaped(
+    datagram: str, payload: str
+) -> None:
+    master, slave = parse_frames(bytes.fromhex(datagram))
+
+    assert master.checksum_ok
+    assert slave.checksum_ok
+    assert slave.data == bytes.fromhex(payload)
+
+
+def test_doubled_start_byte_in_a_master_payload_is_unescaped() -> None:
+    (frame,) = parse_frames(master_frame(0x00F5, 0x55, bytes([0x5C, 0x5C, 0x04])))
+
+    assert frame.checksum_ok
+    assert frame.data == bytes([0x5C, 0x04])
+
+
+def test_checksum_of_0x5c_is_sent_as_0xc5() -> None:
+    # Captured off the bus: these bytes XOR to 0x5C.
+    datagram = bytes.fromhex(
+        "5c 00 f5 91 00 64 c0 91 10 63 01 82 01 6a 03 5a 03 7e 00 32 03 83 01 01 00 c5"
+    )
+
+    _, slave = parse_frames(datagram)
+
+    assert slave.checksum_ok

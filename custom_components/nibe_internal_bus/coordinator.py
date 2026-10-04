@@ -15,6 +15,7 @@ import asyncio
 import logging
 import socket
 from collections import Counter
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from time import monotonic
 from typing import Any
@@ -26,9 +27,11 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    ADDITION_RELAY_KW,
     BUS_ADDRESS,
     DISCRETE_FIELDS,
     DOMAIN,
+    FIELD_ADDITION_POWER,
     FIELD_COMPRESSOR,
     FIELD_OPERATING_MODE,
     FIELD_THREE_WAY_VALVE,
@@ -45,11 +48,44 @@ from .protocol import TRIGGER_PACKET, parse_frames
 _LOGGER = logging.getLogger(__name__)
 
 
-def operating_mode(compressor: int, valve: int) -> str:
-    """Map the relay bits to the mode the pump is actually in."""
-    if not compressor:
+def addition_power(values: Mapping[str, Any]) -> int:
+    """Nominal electrical addition power in kW, from its relay bits."""
+    return sum(kw for field_id, kw in ADDITION_RELAY_KW.items() if values.get(field_id))
+
+
+def operating_mode(compressor: int, addition_kw: int, valve: int) -> str:
+    """Map the relay bits to the mode the pump is actually in.
+
+    The electrical addition sits upstream of the 3-way valve, so it produces
+    heat for whichever side the valve feeds, with or without the compressor.
+    """
+    if not compressor and not addition_kw:
         return MODE_STANDBY
     return MODE_HOT_WATER if valve else MODE_HEATING
+
+
+class EnergyMeter:
+    """Integrates a stepwise power into energy.
+
+    Power only changes when a relay switches, and every relay frame is fed in,
+    so holding each value until the next one gives the exact integral. A gap
+    longer than ``max_gap`` means the bus went quiet and is not counted.
+    """
+
+    def __init__(self, max_gap: float) -> None:
+        self.kwh = 0.0
+        self._max_gap = max_gap
+        self._power_kw: float | None = None
+        self._at: float | None = None
+
+    def update(self, power_kw: float, at: float) -> None:
+        """Record that the power is ``power_kw`` from monotonic time ``at`` on."""
+        if self._at is not None and self._power_kw is not None:
+            elapsed = at - self._at
+            if 0 < elapsed <= self._max_gap:
+                self.kwh += self._power_kw * elapsed / 3600
+        self._power_kw = power_kw
+        self._at = at
 
 
 class CannotConnect(Exception):
@@ -149,6 +185,7 @@ class NibeInternalBusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.frame_counts: Counter[str] = Counter()
         self.checksum_errors = 0
         self.last_raw: bytes | None = None
+        self.addition_energy = EnergyMeter(max_gap=STALE_AFTER)
 
         self._push_interval = push_interval
         self._seen: dict[str, float] = {}
@@ -250,22 +287,35 @@ class NibeInternalBusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @callback
     def _handle_derived(self) -> bool:
-        """Derive the operating mode, which no payload carries directly.
+        """Derive the values no payload carries directly.
 
-        The compressor bit says whether the pump is producing anything at all,
-        and the 3-way valve says where that production goes. The polled
-        command (0x96 / 0x99) only tracks compressor state, not demand: 0x99
-        was polled throughout a 30 minute run with the valve set to heating.
+        The addition power is the sum of its relays' ratings. The compressor
+        and addition say whether the pump is producing anything at all, and the
+        3-way valve says where that production goes. The polled command
+        (0x96 / 0x99) only tracks compressor state, not demand: 0x99 was polled
+        throughout a 30 minute run with the valve set to heating.
+
+        Every value here comes from the same 0x55 frame, so they share its
+        timestamp; feeding the meter that timestamp again for other frames adds
+        nothing.
         """
         if FIELD_COMPRESSOR not in self._seen:
             return False
 
+        seen = self._seen[FIELD_COMPRESSOR]
+        power = addition_power(self.values)
         mode = operating_mode(
-            self.values[FIELD_COMPRESSOR], self.values[FIELD_THREE_WAY_VALVE]
+            self.values[FIELD_COMPRESSOR], power, self.values[FIELD_THREE_WAY_VALVE]
         )
-        changed = self.values.get(FIELD_OPERATING_MODE) != mode
+        changed = (
+            self.values.get(FIELD_OPERATING_MODE) != mode
+            or self.values.get(FIELD_ADDITION_POWER) != power
+        )
         self.values[FIELD_OPERATING_MODE] = mode
-        self._seen[FIELD_OPERATING_MODE] = self._seen[FIELD_COMPRESSOR]
+        self.values[FIELD_ADDITION_POWER] = power
+        self._seen[FIELD_OPERATING_MODE] = seen
+        self._seen[FIELD_ADDITION_POWER] = seen
+        self.addition_energy.update(power, seen)
         return changed
 
     @callback

@@ -66,13 +66,25 @@
           "hot_water": "Hot water"
         }
       },
+      "electrical_addition_power": { "name": "Electrical addition power" },
+      "electrical_addition_energy": { "name": "Electrical addition energy" },
       "relays_raw": { "name": "Relay bitmask (PCA-Base)" },
-      "gp1_duty_raw": { "name": "GP1 raw duty byte" }
+      "relays_raw_byte1": { "name": "Relay bitmask byte 1" },
+      "gp1_duty_raw": { "name": "GP1 raw duty byte" },
+      "status_96_raw": { "name": "Status reply 0x96" },
+      "status_99_raw": { "name": "Status reply 0x99" }
     },
     "binary_sensor": {
       "compressor": { "name": "Compressor" },
       "heating_pump": { "name": "Heating circulation pump" },
-      "brine_pump": { "name": "Brine pump" }
+      "brine_pump": { "name": "Brine pump" },
+      "electrical_addition": { "name": "Electrical addition" },
+      "addition_relay_1kw": { "name": "Electrical addition relay 1 kW" },
+      "addition_relay_2kw_a": { "name": "Electrical addition relay 2 kW A" },
+      "addition_relay_2kw_b": { "name": "Electrical addition relay 2 kW B" },
+      "addition_relay_2kw_c": { "name": "Electrical addition relay 2 kW C" },
+      "relays_byte1_bit2": { "name": "Relay byte 1 bit 2" },
+      "relays_byte1_bit3": { "name": "Relay byte 1 bit 3" }
     }
   }
 }
