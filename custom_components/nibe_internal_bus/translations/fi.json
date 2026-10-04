@@ -66,13 +66,25 @@
           "hot_water": "Käyttövesi"
         }
       },
+      "electrical_addition_power": { "name": "Lisäsähkön teho" },
+      "electrical_addition_energy": { "name": "Lisäsähkön energia" },
       "relays_raw": { "name": "Releiden bittimaski (PCA-Base)" },
-      "gp1_duty_raw": { "name": "GP1:n raaka ohjausarvo" }
+      "relays_raw_byte1": { "name": "Releiden bittimaski, tavu 1" },
+      "gp1_duty_raw": { "name": "GP1:n raaka ohjausarvo" },
+      "status_96_raw": { "name": "Tilavastaus 0x96" },
+      "status_99_raw": { "name": "Tilavastaus 0x99" }
     },
     "binary_sensor": {
       "compressor": { "name": "Kompressori" },
       "heating_pump": { "name": "Lämmityspiirin kiertopumppu" },
-      "brine_pump": { "name": "Keruupiirin pumppu" }
+      "brine_pump": { "name": "Keruupiirin pumppu" },
+      "electrical_addition": { "name": "Lisäsähkö" },
+      "addition_relay_1kw": { "name": "Lisäsähkön rele 1 kW" },
+      "addition_relay_2kw_a": { "name": "Lisäsähkön rele 2 kW A" },
+      "addition_relay_2kw_b": { "name": "Lisäsähkön rele 2 kW B" },
+      "addition_relay_2kw_c": { "name": "Lisäsähkön rele 2 kW C" },
+      "relays_byte1_bit2": { "name": "Releiden tavu 1, bitti 2" },
+      "relays_byte1_bit3": { "name": "Releiden tavu 1, bitti 3" }
     }
   }
 }

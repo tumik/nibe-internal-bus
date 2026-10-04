@@ -48,6 +48,18 @@ def _slave_ntc(cmd: int, index: int) -> FieldSpec:
     )
 
 
+def _slave_byte(cmd: int, index: int) -> FieldSpec:
+    """A whole raw byte of a slave reply."""
+    return FieldSpec(
+        field_id=f"{BUS_ADDRESS:04X}_{SLAVE}_{cmd:02X}_byte{index}",
+        address=BUS_ADDRESS,
+        direction=SLAVE,
+        cmd=cmd,
+        kind="byte",
+        index=index,
+    )
+
+
 def _master_byte(cmd: int, index: int) -> FieldSpec:
     """A whole raw byte of a master frame."""
     return FieldSpec(
@@ -80,9 +92,20 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     _master_bit(0x55, 0, 1),  # heating circuit pump
     _master_bit(0x55, 0, 2),  # brine (collector) pump
     _master_bit(0x55, 0, 3),  # 3-way valve: 0 = heating, 1 = hot water
+    _master_bit(0x55, 0, 4),  # electrical addition, 2 kW (third step)
+    _master_bit(0x55, 0, 6),  # electrical addition, 2 kW (first step)
+    # 0x55 byte 1 holds the rest of the electrical addition relays.
+    _master_byte(0x55, 1),
+    _master_bit(0x55, 1, 0),  # electrical addition, 2 kW (second step)
+    _master_bit(0x55, 1, 1),  # electrical addition, 1 kW
+    _master_bit(0x55, 1, 2),  # unknown, always set
+    _master_bit(0x55, 1, 3),  # unknown, set whenever the brine pump runs
     # 0xA0 carries the two circulation pumps' PWM duty commands.
     _master_byte(0xA0, 0),  # GP1
     _master_byte(0xA0, 1),  # GP2
+    # One-byte status replies that flip briefly around compressor starts/stops.
+    _slave_byte(0x96, 0),
+    _slave_byte(0x99, 0),
     # The main board's own sensors.
     _slave_ntc(0x90, 0),  # BT1 outdoor
     _slave_ntc(0x90, 1),  # BT7 hot water top

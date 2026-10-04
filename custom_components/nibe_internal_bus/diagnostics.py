@@ -29,6 +29,7 @@ async def async_get_config_entry_diagnostics(
             "last_datagram_utc": coordinator.last_datagram_utc,
             "last_raw": coordinator.last_raw.hex(" ") if coordinator.last_raw else None,
         },
+        "addition_energy_kwh": coordinator.addition_energy.kwh,
         "values": {
             field_id: {"value": value, "fresh": coordinator.is_fresh(field_id)}
             for field_id, value in sorted(coordinator.values.items())

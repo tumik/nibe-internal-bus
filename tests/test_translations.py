@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from custom_components.nibe_internal_bus.binary_sensor import BINARY_SENSORS
-from custom_components.nibe_internal_bus.sensor import SENSORS
+from custom_components.nibe_internal_bus.sensor import ADDITION_ENERGY, SENSORS
 
 COMPONENT = Path(__file__).parents[1] / "custom_components" / "nibe_internal_bus"
 STRINGS = COMPONENT / "strings.json"
@@ -46,7 +46,7 @@ def test_translation_has_the_same_keys_as_english(language: str) -> None:
 def test_every_entity_has_a_name(language: str) -> None:
     entity = load(TRANSLATIONS / f"{language}.json")["entity"]
 
-    for description in SENSORS:
+    for description in (*SENSORS, ADDITION_ENERGY):
         assert entity["sensor"][description.key]["name"]
     for description in BINARY_SENSORS:
         assert entity["binary_sensor"][description.key]["name"]
