@@ -1,0 +1,27 @@
+# Optional package: log every byte the RS-485 transceiver receives, as hex.
+#
+# For protocol research only. Include it from the main config with
+#
+#   packages:
+#     uart_debug: !include uart-debug.yaml
+#
+# then read the device log (`esphome logs`, the ESPHome dashboard, or the Home
+# Assistant ESPHome integration with debug logging enabled). One line is logged
+# per burst of bytes, roughly ten per second, so remove the include again once
+# the capture is done.
+#
+# The lines are logged at DEBUG level, ESPHome's default. A `logger: level:`
+# set in the main config overrides anything a package sets, so it must not be
+# raised above DEBUG while capturing.
+#
+# This only adds a receive hook; it never transmits on the bus.
+
+uart:
+  debug:
+    direction: RX
+    # Bytes closer together than this are logged on one line, which keeps a
+    # frame together but splits it whenever the pump pauses mid-frame.
+    after:
+      timeout: 5ms
+    sequence:
+      - lambda: UARTDebug::log_hex(direction, bytes, ':');

@@ -26,6 +26,10 @@ ota:
 
 logger:
 
+# Uncomment to log every received byte for protocol research (see the file).
+# packages:
+#   uart_debug: !include uart-debug.yaml
+
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
