@@ -9,6 +9,15 @@ from __future__ import annotations
 import pytest
 
 from custom_components.nibe_internal_bus.binary_sensor import BINARY_SENSORS
+from custom_components.nibe_internal_bus.const import (
+    FIELD_GP1_DUTY,
+    FIELD_GP2_DUTY,
+    FIELD_HP_ALARM,
+    FIELD_LP_ALARM,
+    FIELD_TB_ALARM,
+    STATUS_FAULT_CODES,
+    STATUS_STATES,
+)
 from custom_components.nibe_internal_bus.coordinator import (
     EnergyMeter,
     addition_power,
@@ -19,21 +28,28 @@ from custom_components.nibe_internal_bus.decoder import (
     decode_frame,
     ntc_to_celsius,
 )
-from custom_components.nibe_internal_bus.fields import FIELD_SPECS, NTC_COEFFICIENTS
+from custom_components.nibe_internal_bus.fields import FIELD_SPECS
+from custom_components.nibe_internal_bus.ntc_table import NTC_X10
 from custom_components.nibe_internal_bus.protocol import (
     MASTER,
     SLAVE,
     Frame,
     parse_frames,
 )
+from custom_components.nibe_internal_bus.pump import (
+    INVERTED_CURVES,
+    duty_from_percent,
+    percent_from_duty,
+)
 from custom_components.nibe_internal_bus.sensor import (
     ADDITION_ENERGY,
-    GP1_CALIBRATION,
     PERCENT_FROM_DUTY,
     SENSORS,
 )
 
-TOLERANCE = 0.1
+# The firmware table is what the pump itself uses; the golden vectors below were
+# read from the pump's (3-sample averaged) USB log, so allow one display digit.
+TOLERANCE = 0.11
 
 
 def frame(direction: str, cmd: int, payload: str) -> Frame:
@@ -47,10 +63,22 @@ def frame(direction: str, cmd: int, payload: str) -> Frame:
 
 
 def test_open_circuit_and_digital_flag_decode_to_nothing() -> None:
-    assert ntc_to_celsius(ADC_MAX, NTC_COEFFICIENTS) is None
-    assert ntc_to_celsius(0, NTC_COEFFICIENTS) is None
-    # Raw 1 is a digital flag; naively decoded it would read ~414 degC.
-    assert ntc_to_celsius(1, NTC_COEFFICIENTS) is None
+    assert ntc_to_celsius(ADC_MAX) is None
+    assert ntc_to_celsius(0) is None
+    # Raw 1 is a digital flag; as an NTC it would read 231.8 degC (> 170).
+    assert ntc_to_celsius(1) is None
+    # Firmware limits are -60.0 .. +170.0 degC, inclusive.
+    assert ntc_to_celsius(25) == pytest.approx(169.1, abs=0.01)
+    assert ntc_to_celsius(24) is None
+    assert ntc_to_celsius(1020) == pytest.approx(-58.2, abs=0.01)
+    assert ntc_to_celsius(1021) is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "celsius"), [(444, 49.9), (787, 15.2), (500, 44.2), (1000, -31.1)]
+)
+def test_table_values_match_the_firmware(raw: int, celsius: float) -> None:
+    assert ntc_to_celsius(raw) == pytest.approx(celsius, abs=0.001)
 
 
 def test_main_board_temperatures() -> None:
@@ -78,8 +106,10 @@ def test_ep14_temperatures() -> None:
     assert values["00F5_SLAVE_91_ntc4"] == pytest.approx(31.7, abs=TOLERANCE)
     assert values["00F5_SLAVE_91_ntc5"] == pytest.approx(27.5, abs=TOLERANCE)
     assert values["00F5_SLAVE_91_ntc6"] == pytest.approx(24.4, abs=TOLERANCE)
-    # Slot 7 holds raw 1, a digital flag, and must not become a temperature.
-    assert len(values) == 7
+    # Slot 7 holds raw 1, a digital flag (the LP input), not a temperature.
+    assert "00F5_SLAVE_91_ntc7" not in values
+    assert values["00F5_SLAVE_91_din_gt7"] == 0
+    assert len(values) == 8
 
 
 def test_ep14_temperatures_with_a_doubled_start_byte() -> None:
@@ -123,9 +153,7 @@ def test_main_board_temperatures_with_a_doubled_start_byte() -> None:
     ("payload", "gp1_duty", "gp2_duty"),
     [("3b 64", 59, 100), ("34 00", 52, 0)],
 )
-def test_pump_duty_bytes_decode_raw(
-    payload: str, gp1_duty: int, gp2_duty: int
-) -> None:
+def test_pump_duty_bytes_decode_raw(payload: str, gp1_duty: int, gp2_duty: int) -> None:
     values = decode_frame(frame(MASTER, 0xA0, payload))
 
     assert values["00F5_MASTER_A0_byte0"] == gp1_duty
@@ -139,24 +167,47 @@ def test_pump_duty_bytes_decode_raw(
 def test_duty_converts_to_percent(
     gp1_duty: int, gp2_duty: int, gp1_percent: int, gp2_percent: int
 ) -> None:
-    assert PERCENT_FROM_DUTY["gp1_speed"](gp1_duty) == pytest.approx(gp1_percent)
+    assert PERCENT_FROM_DUTY["gp1_speed"](gp1_duty) == pytest.approx(gp1_percent, abs=1)
     assert PERCENT_FROM_DUTY["gp2_speed"](gp2_duty) == pytest.approx(gp2_percent)
 
 
-@pytest.mark.parametrize(("duty", "percent"), GP1_CALIBRATION)
-def test_gp1_hits_every_known_speed_setting(duty: int, percent: float) -> None:
-    assert PERCENT_FROM_DUTY["gp1_speed"](duty) == pytest.approx(percent)
+@pytest.mark.parametrize(
+    ("percent", "gp1_duty", "gp2_duty"),
+    [(0, 100, 100), (1, 77, 77), (30, 59, 58), (50, 45, 44), (99, 13, 10), (100, 0, 0)],
+)
+def test_pump_curves_match_the_firmware(
+    percent: int, gp1_duty: int, gp2_duty: int
+) -> None:
+    assert duty_from_percent(percent, INVERTED_CURVES[0x0F]) == gp1_duty
+    assert duty_from_percent(percent, INVERTED_CURVES[0x0E]) == gp2_duty
 
 
-def test_gp1_reads_zero_when_stopped() -> None:
+@pytest.mark.parametrize("pump_type", [0x0F, 0x0E, 0x0D, 0x1A])
+def test_pump_inverse_is_within_one_percent(pump_type: int) -> None:
+    curve = INVERTED_CURVES[pump_type]
+    for percent in range(101):
+        back = percent_from_duty(duty_from_percent(percent, curve), curve)
+        assert back is not None
+        assert abs(back - percent) <= 1
+
+
+def test_gp1_hits_the_settings_seen_in_the_usb_log() -> None:
+    # (duty byte, pump menu percent) pairs confirmed against GP1-speed 43437.
+    for duty, percent in ((0x20, 70), (0x2D, 50), (0x34, 40), (0x3B, 30)):
+        assert PERCENT_FROM_DUTY["gp1_speed"](duty) == pytest.approx(percent, abs=1)
+
+
+def test_pump_reads_zero_when_stopped_and_none_without_pwm() -> None:
     assert PERCENT_FROM_DUTY["gp1_speed"](0x64) == 0
+    assert PERCENT_FROM_DUTY["gp2_speed"](0x64) == 0
+    assert PERCENT_FROM_DUTY["gp2_speed"](0xFF) is None
 
 
-def test_gp1_scale_is_monotonic_and_bounded() -> None:
-    percents = [PERCENT_FROM_DUTY["gp1_speed"](duty) for duty in range(256)]
-
-    assert all(0 <= percent <= 100 for percent in percents)
-    assert all(a >= b for a, b in zip(percents, percents[1:], strict=False))
+def test_pump_scale_is_monotonic_and_bounded() -> None:
+    for key in ("gp1_speed", "gp2_speed"):
+        percents = [PERCENT_FROM_DUTY[key](duty) for duty in range(255)]
+        assert all(0 <= percent <= 100 for percent in percents)
+        assert all(a >= b for a, b in zip(percents, percents[1:], strict=False))
 
 
 @pytest.mark.parametrize(
@@ -257,8 +308,106 @@ def test_frames_failing_their_checksum_are_not_decoded() -> None:
     assert decode_frame(bad) == {}
 
 
-def test_every_field_id_is_unique() -> None:
-    assert len({spec.field_id for spec in FIELD_SPECS}) == len(FIELD_SPECS)
+def test_every_field_id_is_unique_per_command() -> None:
+    keys = {(spec.field_id, spec.cmd) for spec in FIELD_SPECS}
+    assert len(keys) == len(FIELD_SPECS)
+
+
+# One complete idle bus cycle, one datagram per line, captured live from an F1226
+# (compressor, pumps and addition off, no alarms).
+IDLE_CYCLE = (
+    "5C00F5A00264645706",
+    "5C00F555020004A606",
+    "5C00F5960063C09601055206",
+    "5C00F5900065C0901065039601BC0192020100FF03FF03FF036106",
+    "5C00F5910064C09110A402BE021403FC026D029B02C20201008506",
+    "5C00F5920067C09210B500FF03FF0303020100FF03FF03FF030B06",
+    "5C00F5930066C09306A40322000100D106",
+    "5C00F585007006",
+)
+
+
+def decode_datagrams(datagrams: tuple[str, ...]) -> dict[str, float | int]:
+    values: dict[str, float | int] = {}
+    for datagram in datagrams:
+        for decoded in parse_frames(bytes.fromhex(datagram)):
+            assert decoded.checksum_ok
+            values.update(decode_frame(decoded))
+    return values
+
+
+def test_idle_cycle_captured_from_the_pump() -> None:
+    values = decode_datagrams(IDLE_CYCLE)
+
+    # Relays: everything off except the always-set bit 1.2.
+    assert values["00F5_MASTER_55_byte0"] == 0x00
+    assert values["00F5_MASTER_55_byte1"] == 0x04
+    assert values["00F5_MASTER_55_byte1bit4"] == 0
+    assert values["00F5_MASTER_55_byte0bit5"] == 0
+    assert values["00F5_MASTER_55_byte0bit7"] == 0
+    # Both pumps stopped (duty 100), compressor protection reports "stopped".
+    assert PERCENT_FROM_DUTY["gp1_speed"](values[FIELD_GP1_DUTY]) == 0
+    assert PERCENT_FROM_DUTY["gp2_speed"](values[FIELD_GP2_DUTY]) == 0
+    assert values["00F5_SLAVE_status_code"] == 5
+    # Protection inputs inactive, spare words as seen on the wire.
+    assert values["00F5_SLAVE_93_din_lt0"] == 0  # raw 932
+    assert values["00F5_SLAVE_91_din_gt7"] == 0  # raw 1
+    assert values["00F5_SLAVE_92_din_gt0"] == 0  # raw 181
+    assert values["00F5_SLAVE_92_adc3"] == 515
+    assert values["00F5_SLAVE_93_adc1"] == 34
+    # Temperatures straight from the firmware table (BT1 raw 0x0365 = 869).
+    assert values["00F5_SLAVE_90_ntc0"] == pytest.approx(NTC_X10[869] / 10)
+    assert values["00F5_SLAVE_91_ntc0"] == pytest.approx(NTC_X10[0x02A4] / 10)
+    # Open inputs do not become temperatures.
+    assert "00F5_SLAVE_90_ntc4" not in values
+
+
+def test_protection_inputs_use_the_firmware_thresholds() -> None:
+    hp = FIELD_HP_ALARM
+    lp = FIELD_LP_ALARM
+    tb = FIELD_TB_ALARM
+    ok_93 = decode_frame(frame(SLAVE, 0x93, "a4 03 22 00 01 00"))
+    alarm_93 = decode_frame(frame(SLAVE, 0x93, "2b 01 22 00 01 00"))  # raw 299
+    edge_93 = decode_frame(frame(SLAVE, 0x93, "2c 01 22 00 01 00"))  # raw 300
+    assert (ok_93[hp], alarm_93[hp], edge_93[hp]) == (0, 1, 0)
+
+    lp_payload = "a4 02 be 02 14 03 fc 02 6d 02 9b 02 c2 02 {} 01"
+    assert decode_frame(frame(SLAVE, 0x91, lp_payload.format("2d")))[lp] == 1
+    assert decode_frame(frame(SLAVE, 0x91, lp_payload.format("2c")))[lp] == 0
+
+    tb_payload = "{} 01 ff 03 ff 03 03 02 01 00 ff 03 ff 03 ff 03"
+    assert decode_frame(frame(SLAVE, 0x92, tb_payload.format("2d")))[tb] == 1
+    assert decode_frame(frame(SLAVE, 0x92, tb_payload.format("2c")))[tb] == 0
+
+
+def test_spare_relay_bits_and_hot_water_circulation() -> None:
+    values = decode_frame(frame(MASTER, 0x55, "a2 14"))
+
+    assert values["00F5_MASTER_55_byte0bit5"] == 1
+    assert values["00F5_MASTER_55_byte0bit7"] == 1
+    assert values["00F5_MASTER_55_byte1bit4"] == 1
+
+
+def test_status_codes_and_fault_set() -> None:
+    assert set(STATUS_STATES) >= {1, 2, 3, 4, 5, 6, 7, 8, 9, 0xFE}
+    assert STATUS_FAULT_CODES == {1, 2, 3, 4, 8, 9, 0xFE}
+    # Normal operating states are not faults.
+    assert not {5, 6, 7} & STATUS_FAULT_CODES
+
+
+@pytest.mark.parametrize("cmd", [0x96, 0x99])
+@pytest.mark.parametrize("code", [5, 6])
+def test_status_code_is_merged_across_both_polls(cmd: int, code: int) -> None:
+    values = decode_frame(frame(SLAVE, cmd, f"{code:02x}"))
+
+    assert values["00F5_SLAVE_status_code"] == code
+
+
+def test_nak_frames_are_not_decoded() -> None:
+    (relays,) = parse_frames(bytes.fromhex("5c 00 f5 55 02 0f 0c a1 15"))
+
+    assert relays.acked is False
+    assert decode_frame(relays) == {}
 
 
 def test_every_entity_field_id_is_produced_by_the_decoder() -> None:

@@ -27,8 +27,16 @@ from .const import (
     FIELD_BRINE_PUMP,
     FIELD_COMPRESSOR,
     FIELD_HEATING_PUMP,
+    FIELD_HOT_WATER_CIRCULATION,
+    FIELD_HP_ALARM,
+    FIELD_LP_ALARM,
+    FIELD_RELAY_K5,
+    FIELD_RELAY_K7,
     FIELD_RELAYS_BYTE1_BIT2,
     FIELD_RELAYS_BYTE1_BIT3,
+    FIELD_STATUS_CODE,
+    FIELD_TB_ALARM,
+    STATUS_FAULT_CODES,
 )
 from .coordinator import NibeInternalBusCoordinator
 from .entity import NibeInternalBusEntity
@@ -73,10 +81,40 @@ BINARY_SENSORS: tuple[NibeBinarySensorDescription, ...] = (
         field_id=FIELD_ADDITION_POWER,
         device_class=BinarySensorDeviceClass.RUNNING,
     ),
+    # The display's hot-water circulation request (register 43180).
+    NibeBinarySensorDescription(
+        key="hot_water_circulation",
+        field_id=FIELD_HOT_WATER_CIRCULATION,
+        device_class=BinarySensorDeviceClass.RUNNING,
+    ),
+    # Safety inputs of the PCA Base, 1 = alarm (firmware regs 40052/53/54).
+    NibeBinarySensorDescription(
+        key="hp_alarm",
+        field_id=FIELD_HP_ALARM,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+    ),
+    NibeBinarySensorDescription(
+        key="lp_alarm",
+        field_id=FIELD_LP_ALARM,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+    ),
+    NibeBinarySensorDescription(
+        key="tb_alarm",
+        field_id=FIELD_TB_ALARM,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+    ),
+    # Phase loss / phase sequence / motor protection / soft-starter overheat.
+    NibeBinarySensorDescription(
+        key="compressor_fault",
+        field_id=FIELD_STATUS_CODE,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+    ),
     _diagnostic("addition_relay_1kw", FIELD_ADDITION_1KW),
     _diagnostic("addition_relay_2kw_a", FIELD_ADDITION_2KW_A),
     _diagnostic("addition_relay_2kw_b", FIELD_ADDITION_2KW_B),
     _diagnostic("addition_relay_2kw_c", FIELD_ADDITION_2KW_C),
+    _diagnostic("relay_k5", FIELD_RELAY_K5),
+    _diagnostic("relay_k7", FIELD_RELAY_K7),
     _diagnostic("relays_byte1_bit2", FIELD_RELAYS_BYTE1_BIT2),
     _diagnostic("relays_byte1_bit3", FIELD_RELAYS_BYTE1_BIT3),
 )
@@ -111,4 +149,8 @@ class NibeInternalBusBinarySensor(NibeInternalBusEntity, BinarySensorEntity):
     def is_on(self) -> bool | None:
         """Return whether the relay is energised."""
         value = self.coordinator.values.get(self._field_id)
-        return None if value is None else bool(value)
+        if value is None:
+            return None
+        if self.entity_description.key == "compressor_fault":
+            return int(value) in STATUS_FAULT_CODES
+        return bool(value)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from bisect import bisect_left
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +24,8 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NibeInternalBusConfigEntry
 from .const import (
+    FIELD_ADC_92_3,
+    FIELD_ADC_93_1,
     FIELD_ADDITION_POWER,
     FIELD_GP1_DUTY,
     FIELD_GP2_DUTY,
@@ -33,15 +34,18 @@ from .const import (
     FIELD_RELAYS_RAW_BYTE1,
     FIELD_STATUS_96,
     FIELD_STATUS_99,
+    FIELD_STATUS_CODE,
     FIELD_THREE_WAY_VALVE,
     MODE_HEATING,
     MODE_HOT_WATER,
     MODE_STANDBY,
+    STATUS_STATES,
     VALVE_HEATING,
     VALVE_HOT_WATER,
 )
 from .coordinator import NibeInternalBusCoordinator
 from .entity import NibeInternalBusEntity
+from .pump import gp1_percent, gp2_percent
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -72,8 +76,9 @@ def _diagnostic_raw(key: str, field_id: str) -> NibeSensorDescription:
     )
 
 
-# The main board's own sensors are in the SLAVE 0x90 reply; the EP14 cooling
-# module's set is in 0x91. All eleven are raw 10-bit NTC counts (see decoder).
+# The main board's own sensors are in the SLAVE 0x90 reply; the second
+# PCA-Base input block's set is in 0x91. All eleven are raw 10-bit NTC counts
+# (see decoder).
 SENSORS: tuple[NibeSensorDescription, ...] = (
     _temperature("bt1_outdoor", "00F5_SLAVE_90_ntc0"),
     _temperature("bt7_hot_water_top", "00F5_SLAVE_90_ntc1"),
@@ -133,6 +138,16 @@ SENSORS: tuple[NibeSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
     ),
+    # Soft-starter / compressor-protection feedback from the PCA Base (reply to
+    # 0x96 / 0x99): lags the compressor relay by a few seconds.
+    NibeSensorDescription(
+        key="compressor_state",
+        field_id=FIELD_STATUS_CODE,
+        device_class=SensorDeviceClass.ENUM,
+        options=list(STATUS_STATES.values()),
+    ),
+    _diagnostic_raw("adc_92_3", FIELD_ADC_92_3),
+    _diagnostic_raw("adc_93_1", FIELD_ADC_93_1),
     _diagnostic_raw("status_96_raw", FIELD_STATUS_96),
     _diagnostic_raw("status_99_raw", FIELD_STATUS_99),
 )
@@ -152,34 +167,9 @@ ADDITION_ENERGY = NibeSensorDescription(
 # 1 = it feeds the hot water coil.
 VALVE_STATES = {0: VALVE_HEATING, 1: VALVE_HOT_WATER}
 
-# GP1's duty byte for each speed set in the pump's menu 5.1.11, as
-# (duty, percent) in duty order. They do not lie on one straight line, so
-# speeds in between are interpolated between the nearest two.
-GP1_CALIBRATION: tuple[tuple[int, float], ...] = (
-    (0x20, 70),
-    (0x2D, 50),
-    (0x34, 40),
-    (0x3B, 30),
-)
-GP1_STOPPED = 0x64
-
-
-def _gp1_percent(duty: int) -> float:
-    """GP1's duty-to-percent scale, piecewise linear between known settings."""
-    if duty >= GP1_STOPPED:
-        return 0.0
-    upper = bisect_left(GP1_CALIBRATION, duty, key=lambda point: point[0])
-    upper = min(max(upper, 1), len(GP1_CALIBRATION) - 1)
-    (duty0, percent0), (duty1, percent1) = GP1_CALIBRATION[upper - 1 : upper + 1]
-    percent = percent0 + (percent1 - percent0) * (duty - duty0) / (duty1 - duty0)
-    return min(max(percent, 0.0), 100.0)
-
-
-def _gp2_percent(duty: int) -> float:
-    return 100 - duty
-
-
-PERCENT_FROM_DUTY = {"gp1_speed": _gp1_percent, "gp2_speed": _gp2_percent}
+# Pump duty -> percent uses the display firmware's inverted PWM curves
+# (see pump.py): GP1 = Grundfos UPM2 25-75 (0x0F), GP2 = Gfos UPM Geo 25-85 (0x0E).
+PERCENT_FROM_DUTY = {"gp1_speed": gp1_percent, "gp2_speed": gp2_percent}
 
 
 async def async_setup_entry(
@@ -215,6 +205,8 @@ class NibeInternalBusSensor(NibeInternalBusEntity, SensorEntity):
         if value is None:
             return None
 
+        if self.entity_description.key == "compressor_state":
+            return STATUS_STATES.get(int(value))
         if self.entity_description.key == "three_way_valve":
             return VALVE_STATES.get(int(value))
         if convert := PERCENT_FROM_DUTY.get(self.entity_description.key):
