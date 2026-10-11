@@ -37,6 +37,10 @@ class Frame:
     cmd: int
     data: bytes
     checksum_ok: bool
+    # True / False when the byte right after the frame is ACK (06) / NAK (15),
+    # None when no handshake byte follows (e.g. the datagram ended, or the
+    # request was never answered at all, like the 0x55 sent to a missing 0xFC).
+    acked: bool | None = None
 
 
 def xor8(data: bytes) -> int:
@@ -72,6 +76,26 @@ def unescape(payload: bytes) -> bytes:
     return payload.replace(_ESCAPED_START, bytes([START_MASTER]))
 
 
+def _handshake(data: bytes, index: int) -> bool | None:
+    """ACK (True) / NAK (False) byte at ``index``, else None."""
+    if index < len(data):
+        if data[index] == BYTE_ACK:
+            return True
+        if data[index] == BYTE_NAK:
+            return False
+    return None
+
+
+def _boundary_ok(data: bytes, index: int) -> bool:
+    """Whether ``index`` can plausibly follow a frame (end, ACK/NAK or a start)."""
+    return index >= len(data) or data[index] in (
+        BYTE_ACK,
+        BYTE_NAK,
+        START_MASTER,
+        START_SLAVE,
+    )
+
+
 def parse_frames(data: bytes) -> list[Frame]:
     """Split one UDP datagram into its individual frames.
 
@@ -98,32 +122,39 @@ def parse_frames(data: bytes) -> list[Frame]:
             end = pos + 5 + data[pos + 4]
             if end >= end_of_data:
                 break
+            checksum_ok = data[end] == xor8(data[pos + 1 : end])
             frames.append(
                 Frame(
                     direction=MASTER,
                     address=address,
                     cmd=cmd,
                     data=unescape(data[pos + 5 : end]),
-                    checksum_ok=data[end] == xor8(data[pos + 1 : end]),
+                    checksum_ok=checksum_ok,
+                    acked=_handshake(data, end + 1),
                 )
             )
             last_address = address
-            pos = end + 1
+            # A corrupt length byte would swallow the following good frames:
+            # after a bad checksum only skip the frame if it ends where a new
+            # frame / handshake byte could start, otherwise rescan from the next byte.
+            pos = end + 1 if checksum_ok or _boundary_ok(data, end + 1) else pos + 1
         elif byte == START_SLAVE and pos + 4 <= end_of_data:
             cmd = data[pos + 1]
             end = pos + 3 + data[pos + 2]
             if end >= end_of_data:
                 break
+            checksum_ok = data[end] == xor8(data[pos:end])
             frames.append(
                 Frame(
                     direction=SLAVE,
                     address=last_address,
                     cmd=cmd,
                     data=unescape(data[pos + 3 : end]),
-                    checksum_ok=data[end] == xor8(data[pos:end]),
+                    checksum_ok=checksum_ok,
+                    acked=_handshake(data, end + 1),
                 )
             )
-            pos = end + 1
+            pos = end + 1 if checksum_ok or _boundary_ok(data, end + 1) else pos + 1
         else:
             pos += 1
 

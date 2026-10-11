@@ -113,3 +113,33 @@ def test_checksum_of_0x5c_is_sent_as_0xc5() -> None:
     _, slave = parse_frames(datagram)
 
     assert slave.checksum_ok
+
+
+def test_ack_and_nak_are_attached_to_the_frame_before_them() -> None:
+    acked = master_frame(0x00F5, 0x55, bytes([0x02, 0x04])) + bytes([0x06])
+    naked = master_frame(0x00F5, 0x55, bytes([0x02, 0x04])) + bytes([0x15])
+    bare = master_frame(0x00FC, 0x55, bytes([0xFF]))
+
+    assert parse_frames(acked)[0].acked is True
+    assert parse_frames(naked)[0].acked is False
+    assert parse_frames(bare)[0].acked is None
+
+
+def test_corrupt_length_does_not_swallow_the_next_frame() -> None:
+    good = master_frame(0x00F5, 0x55, bytes([0x02, 0x04])) + bytes([0x06])
+    broken = bytearray(master_frame(0x00F5, 0xA0, bytes([0x64, 0x64])))
+    broken[4] = 0x03  # length claims one byte more than there is
+    frames = parse_frames(bytes(broken) + good)
+
+    assert [f.checksum_ok for f in frames][-1] is True
+    assert frames[-1].cmd == 0x55
+
+
+def test_several_master_frames_in_one_datagram() -> None:
+    datagram = (
+        master_frame(0x00FC, 0x55, bytes([0xFF]))
+        + master_frame(0x00FC, 0x55, bytes([0xFF]))
+        + master_frame(0x00FC, 0x55, bytes([0xFF]))
+    )
+
+    assert [f.cmd for f in parse_frames(datagram)] == [0x55, 0x55, 0x55]
