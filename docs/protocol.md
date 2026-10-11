@@ -71,8 +71,11 @@ it matched on every one of 2 635 log rows compared.
 | 0.6 | Electrical addition, 2 kW (first step) | confirmed |
 | 1.0 | Electrical addition, 2 kW (second step) | confirmed |
 | 1.1 | Electrical addition, 1 kW | confirmed |
-| 1.2 | Unknown, always set | — |
-| 1.3 | Unknown, set exactly when the brine pump runs | — |
+| 0.5 | AA1-K5 relay output, function not identified | firmware |
+| 0.7 | AA1-K7 relay output, function not identified | firmware |
+| 1.2 | Inverted alarm output, set while there is no alarm | inferred |
+| 1.3 | "GP2 speed != 0", a copy of 0.2 | firmware |
+| 1.4 | Hot water circulation request (register 43180) | firmware |
 
 The pump steps its 7 kW immersion heater up through these relays:
 
@@ -97,23 +100,30 @@ start or just after a stop.
 
 ### `A0` — pump PWM duty (master, 2 bytes)
 
-Both bytes are PWM duty in percent, inverted the way Grundfos/Wilo "profile A"
-pumps expect: a bigger byte is a slower pump, and `64` (100 %) stops it.
+Both bytes are inverted PWM duty: a bigger byte is a slower pump, `64` (100)
+stops it and `00` is full speed. The display derives the byte from the pump
+type with a piecewise linear curve:
 
-| Byte | Pump | Known values |
-| --- | --- | --- |
-| 0 | GP1 heating circuit | `20` = 70 %, `2D` = 50 %, `34` = 40 %, `3B` = 30 %, `64` = stopped |
-| 1 | GP2 brine | speed = 100 − byte, so `00` = 100 %, `64` = stopped |
+```
+0 %   -> 100;  100 % -> 0;  else  A + trunc((p - 1) * (B - A) / 98)
+```
 
-The GP1 settings do not lie on one straight line, so the integration
-interpolates between the known points. All four match **GP1-speed** (43437) in
-the USB log; GP2 matches **GP2-speed** (43439).
+| Byte | Pump | Type | A, B | Known values |
+| --- | --- | --- | --- | --- |
+| 0 | GP1 heating circuit | `0F` Grundfos UPM2 25-75 | 77, 13 | `20` = 70 %, `2D` = 50 %, `34` = 40 %, `3B` = 30 %, `64` = stopped |
+| 1 | GP2 brine | `0E` Grundfos UPM Geo 25-85 | 77, 10 | `64` = stopped |
+
+The pump types above are those of the F1226 used here; other serial ranges use
+other types (curves in `pump.py`). A byte of `FF` marks a pump type with no PWM
+curve, i.e. unknown speed. The inverse is exact to ±1 %, since adjacent
+percentages can share a duty byte. The four GP1 values match **GP1-speed**
+(43437) in the USB log.
 
 ### `90`–`93` — analogue inputs (slave replies)
 
 Little-endian 16-bit words holding raw 10-bit ADC counts: eight per reply for
 `90`–`92`, three for `93`. `03FF` is an open (unconnected) input. Temperatures
-are NTC thermistors; the conversion is in the README.
+are NTC thermistors; the conversion (the display firmware's lookup table) is in the README.
 
 | Reply | Word | Sensor | Register |
 | --- | --- | --- | --- |
@@ -130,8 +140,18 @@ are NTC thermistors; the conversion is in the README.
 | `91` | 6 | BT15 liquid line (probably) | not logged |
 | `91` | 7 | always `0001`, a flag rather than a reading | — |
 
-`92` has only words 0 and 3 populated, both frozen (setpoints?); `93`'s values
-are not thermistor-like. Neither is decoded.
+Words that are not thermistors:
+
+| Reply | Word | Meaning | Register |
+| --- | --- | --- | --- |
+| `93` | 0 | HP (high pressure) input, alarm when raw < 300 | 40052 |
+| `91` | 7 | LP (low pressure) input, alarm when raw > 300 | 40053 |
+| `92` | 0 | TB (temperature limiter) input, alarm when raw > 300 | 40054 |
+| `92` | 3 | spare, nothing in the firmware reads it | — |
+| `93` | 1 | spare, nothing in the firmware reads it | — |
+
+Idle values: HP about 932, LP 1, TB 181. `90` and `91` are both input blocks of
+the PCA Base (node `F5`), not of a separate cooling module.
 
 ### `96` / `99` — status (slave replies, 1 byte)
 
@@ -143,8 +163,30 @@ without exception in the capture.
 | `96` | `05` | `06` for ~7 s when the compressor stops |
 | `99` | `06` | `05` for ~7–15 s when the compressor starts |
 
-The meaning is not confirmed; it may be the soft-starter's state. Both are
-available as disabled-by-default diagnostic entities.
+Both carry the soft-starter / compressor-protection status (register 43443):
+
+| Code | Meaning | Display alarm |
+| --- | --- | --- |
+| 5 | stopped | — |
+| 6 | running | — |
+| 7 | soft start in progress | 175 |
+| 1 / 2 / 3 | phase 1 / 2 / 3 missing | 40 / 41 / 42 |
+| 4 | wrong phase sequence | 43 |
+| 8 | motor protection | 54 |
+| 9 | soft starter overheated | 44 |
+| `FE` | phase fault | 45 |
+
+Codes 5 and 6 are the only ones seen on the bus; the others come from the
+display firmware. 7F is the display's internal "no reply" marker.
+
+### Handshake bytes
+
+After a frame the receiver sends `06` (ACK) or `15` (NAK). The ACK following a
+master request comes from the PCA Base, the one following a PCA Base reply from
+the display. The integration ignores frames that were NAKed (the receiver did
+not accept them) and resynchronises when a corrupt length byte would otherwise
+swallow the next good frame. Frames never answered at all, like the `55` sent to
+the absent node `FC`, carry no handshake byte.
 
 ### `85`, `EF`
 
