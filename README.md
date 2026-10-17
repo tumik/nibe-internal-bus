@@ -147,8 +147,9 @@ is never dequeued onto the RS-485 bus. It is inert.
 
 ### Temperatures
 
-Eleven NTC sensors. The mainboard's own set comes in the `SLAVE 0x90` reply, the
-EP14 cooling module's set in `SLAVE 0x91`.
+Eleven NTC sensors. They come in the `SLAVE 0x90` and `SLAVE 0x91` replies; both
+are input blocks of the same PCA Base board (node `0xF5`), the second one is
+not a separate "EP14 cooling module" board.
 
 | Entity | Frame / slot | Nibe register |
 | --- | --- | --- |
@@ -186,8 +187,27 @@ to within the ADC quantisation floor. They are not approximations.
 | Operating mode | derived from the compressor, electrical addition and valve bits |
 | Relay bitmask (PCA-Base) | `MASTER 0x55` byte 0 — diagnostic, disabled by default |
 | Relay bitmask byte 1 | `MASTER 0x55` byte 1 — diagnostic, disabled by default |
-| Relay byte 1 bit 2 / bit 3 | `MASTER 0x55` byte 1 bits 2 and 3, meaning unknown — diagnostic, disabled by default |
-| Status reply 0x96 / 0x99 | `SLAVE 0x96` / `0x99` byte 0, meaning unknown — diagnostic, disabled by default |
+| Relay byte 1 bit 2 / bit 3 | `MASTER 0x55` byte 1 bits 2 (inverted alarm output, inferred) and 3 (copy of the brine pump bit) — diagnostic, disabled by default |
+| Compressor state (soft starter) | `SLAVE 0x96` / `0x99` byte 0 (register 43443): stopped, running, soft start, phase 1/2/3 missing, phase sequence, motor protection, soft starter overheated, phase fault |
+| Compressor protection fault | problem sensor, on for phase loss, phase sequence, motor protection, soft starter overheat and phase fault |
+| Hot water circulation | `MASTER 0x55` byte 1 bit 4 (register 43180) |
+| Relay K5 / K7 (AA1) | `MASTER 0x55` byte 0 bits 5 and 7, function not identified — diagnostic, disabled by default |
+| Status reply 0x96 / 0x99 | `SLAVE 0x96` / `0x99` byte 0, raw — diagnostic, disabled by default |
+
+### Alarms
+
+Three safety inputs of the PCA Base are carried in otherwise unused words. They
+are problem sensors that are on while the input is in alarm:
+
+| Entity | Source | Alarm when | Register |
+| --- | --- | --- | --- |
+| High pressure switch alarm (HP) | `SLAVE 0x93` word 0 | raw < 300 | 40052 |
+| Low pressure switch alarm (LP) | `SLAVE 0x91` word 7 | raw > 300 | 40053 |
+| Temperature limiter alarm (TB) | `SLAVE 0x92` word 0 | raw > 300 | 40054 |
+
+The thresholds are the ones in the display firmware. `SLAVE 0x92` word 3 and
+`SLAVE 0x93` word 1 are exposed as raw diagnostic values (disabled by default);
+nothing in the firmware reads them.
 
 ### Electrical addition
 
@@ -231,35 +251,35 @@ at reading this bus fail.
 Each two-byte slot in the `0x90`/`0x91` replies is a **little-endian unsigned
 10-bit thermistor ADC count**. The pump samples each sensor as a resistive
 divider, so the count is proportional to the thermistor's *resistance*, not to
-temperature. Temperature is a logarithmic function of it:
+temperature, and the relation is not linear:
 
 ```
-adc / 1023 = R / (R + R_fixed)
-x          = ln(adc / (1023 - adc))        # = ln(R / R_fixed)
-1/T[K]     = c0 + c1·x + c2·x² + c3·x³     # Steinhart-Hart style
-°C         = 1/T[K] − 273.15
-
-c = [0.003162333411, 0.000251402068, 1.485144801e-06, 1.11796736e-07]
+°C = NTC_X10[adc] / 10        # 1024-entry lookup table, valid -60.0 .. +170.0 °C
 ```
+
+The table is the display firmware's own (`ntc_table.py`), so a reading equals
+what the pump's display computes, with no fitting error. A raw value whose
+temperature falls outside -60.0 .. +170.0 °C is the firmware's "sensor fault"
+case and the entity goes `unavailable`.
 
 Rough shape of the curve:
 
 | adc | 20 | 120 | 250 | 400 | 550 | 700 | 850 | 950 | 1000 | 1023 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| °C | 182.6 | 102.8 | 74.0 | 54.6 | 39.3 | 24.7 | 7.2 | −11.3 | −31.5 | open |
+| °C | 178.8 | 102.5 | 74.0 | 54.6 | 39.3 | 24.7 | 7.2 | −11.3 | −31.1 | open |
 
-The coefficients are physics, not curve-fitting: fitting each slot independently
-against *different* reference registers yields Beta = 3998, 3984, 3991, 4004,
-3908, 3920 K with T(x=0) = 43.09, 43.06, 43.00, 42.95, 43.32, 43.21 °C. Beta
-≈ 3980 K is an ordinary NTC specification.
+The thermistor is an ordinary NTC (Beta around 3980 K). The values were
+originally derived with a Steinhart-Hart style fit; that fit agrees with the
+table to 0.1 K between 0 and 80 °C but drifts by up to 1.4 K above 120 °C (hot
+gas) and 2.5 K below -50 °C, which is why the firmware table is used instead.
 
 ### Out-of-band raw values
 
 | Raw | Meaning | What this integration does |
 | --- | --- | --- |
 | `1023` (`0x03FF`) | Full scale = **open circuit**, sensor not fitted or disconnected | entity goes `unavailable` |
-| `1` | A digital flag sharing the slot layout, not a temperature | ignored |
-| `0` | Short circuit | ignored |
+| `1` | Reads as > 170 °C: a digital flag sharing the slot layout (the LP input), not a temperature | ignored |
+| `0` | Short circuit, > 170 °C | ignored |
 
 `1023` is where the bogus **102.3** came from in earlier `s16/10` decodings. It
 is not a sentinel constant the pump chose; it is the literal reading of an open
@@ -271,21 +291,31 @@ Both bytes of the `MASTER 0xA0` payload are **duty commands, inverted** — a
 bigger byte means a *slower* pump, and `0x64` (100 %) stops it. This is the
 normal Grundfos/Wilo "profile A" convention.
 
+The display converts a speed in percent to the duty byte with a piecewise
+linear curve that depends on the pump type configured in the display:
+
 ```
-GP2 % = 100 − byte1
-GP1 %: interpolated between the known settings below; 0 at 0x64 (stopped)
+ 0 %   -> 100 (stopped)
+ 100 % -> 0
+ else  -> A + trunc((p - 1) * (B - A) / 98)
 ```
+
+The F1226 this integration is written for has GP1 = type `0x0F` (Grundfos
+UPM2 25-75, A = 77, B = 13) and GP2 = type `0x0E` (Grundfos UPM Geo 25-85,
+A = 77, B = 10); the curves for other pump types are in `pump.py`, but the
+types are fixed in the integration for now (other serial ranges use different
+pumps). A duty byte of `0xFF` means a pump type without a PWM curve and reads as
+unknown. The integration inverts the curve; because about half of the duty
+values are shared by two adjacent percentages, the result is exact to ±1 %.
 
 | GP1 byte | `0x20` | `0x2D` | `0x34` | `0x3B` | `0x64` |
 | --- | --- | --- | --- | --- | --- |
 | GP1 % | 70 | 50 | 40 | 30 | stopped |
 
-GP2 is exact. GP1's settings do not lie on one straight line — the earlier
-single-line fit read 70 % as 68.6 % and a stopped pump as −28.6 % — so speeds
-between the known settings are interpolated. All the known settings match the
-pump's own *GP1-speed* (43437). The raw byte is also available as the
-disabled-by-default **GP1 raw duty byte** diagnostic entity, so further settings
-can be added from recorder history.
+These four settings, confirmed against the pump's own *GP1-speed* (43437), lie
+on the same firmware curve. The earlier `GP2 % = 100 − byte` rule was wrong by up
+to 22 points. The raw byte is also available as the disabled-by-default **GP1
+raw duty byte** diagnostic entity.
 
 ### Relay bits
 
@@ -301,8 +331,11 @@ can be added from recorder history.
 | 0 | 6 | Electrical addition 2 kW (A) |
 | 1 | 0 | Electrical addition 2 kW (B) |
 | 1 | 1 | Electrical addition 1 kW |
-| 1 | 2 | Unknown, always set |
-| 1 | 3 | Unknown, set exactly when the brine pump runs |
+| 0 | 5 | AA1-K5 relay output, function not identified |
+| 0 | 7 | AA1-K7 relay output, function not identified |
+| 1 | 2 | Inverted alarm output (inferred), set while there is no alarm |
+| 1 | 3 | "GP2 speed != 0", a copy of bit 0.2 |
+| 1 | 4 | Hot water circulation request (register 43180) |
 
 Common values are `02 04` (idle: circulation only), `07 0C` (heating:
 compressor and brine pump on, valve undiverted) and `0F 0C` (hot water:
@@ -344,11 +377,11 @@ the `0x96`/`0x99` split look like a heating/hot-water distinction.
 One value is marked **candidate** rather than confirmed, and is enabled anyway:
 
 - **Liquid line (BT15)** — `0x91` slot 6 behaves exactly like a real sensor, and
-  BT15 is the one EP14 sensor missing from the list, but it is absent from the
+  BT15 is the one sensor missing from the list, but it is absent from the
   pump's USB log export so it can never be checked against ground truth.
 
-GP1 speed is exact only at the settings in the table above; in between it is an
-interpolation.
+Pump speeds are exact to ±1 % (the duty byte does not distinguish adjacent
+percentages), under the pump-type assumption above.
 
 ### Update rate and availability
 
@@ -369,17 +402,18 @@ independently of this, so recovery after a network blip needs no restart.
 
 Still unidentified on this bus, and deliberately left out:
 
-- **`cmd 0x92`** — only slots 0 and 3 are populated and both are frozen
-  (raw 178 ≈ 58 °C, raw 515 ≈ 42.7 °C); the rest read open. Probably setpoints.
-- **`cmd 0x93`** — raw ~915–936 and ~11–16; the second is far outside any
-  sensible NTC range, so these are probably not thermistors at all.
+- **`cmd 0x92` word 3 and `cmd 0x93` word 1** — raw 514/515 and 34..37; nothing
+  in the display firmware reads them, so they are only exposed as raw
+  diagnostics. (`0x92` word 0 is the TB alarm and `0x93` word 0 the HP alarm,
+  see Alarms.)
 - **`cmd 0x85`, `cmd 0xEF`** — `0xEF` replies `0x0E` about every 40 s.
 - **Address `00FC` cmd `0x55`** — payload is a constant `0xFF`, in bursts of
   three every ~5 s.
-- **`0x55` byte 1 bits 2 and 3** — bit 2 is always set, bit 3 follows the brine
-  pump. Exposed raw as diagnostics.
-- **`cmd 0x96` / `0x99` replies** — normally `05` / `06`, flipping for a few
-  seconds around compressor stops and starts. Exposed raw as diagnostics.
+- **`0x55` byte 1 bits 2 and 3** — bit 2 is set while there is no alarm
+  (inferred), bit 3 is a copy of the brine pump bit. Exposed raw as diagnostics.
+- **`cmd 0x96` / `0x99` replies** — decoded as the soft-starter status (5 =
+  stopped, 6 = running; the fault codes are taken from the display firmware and
+  have not been seen on this bus). Also exposed raw as diagnostics.
 
 ## Where the decoding rules live
 

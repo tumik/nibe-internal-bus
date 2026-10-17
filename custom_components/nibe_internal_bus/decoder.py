@@ -1,43 +1,47 @@
 """Value interpretation for the Nibe internal RS-485 bus.
 
-The two-byte slots in the SLAVE 0x90/0x91 replies are **raw unsigned 10-bit NTC
-thermistor ADC counts, not scaled temperatures**:
+The two-byte slots in the SLAVE 0x90..0x93 replies are **raw unsigned 10-bit
+ADC counts** (little-endian). Thermistor inputs are converted exactly like the
+pump's display does it: ``NTC_X10[raw]`` (the firmware's own 1024-entry lookup
+table, degC x 10), then a range check of -60.0 .. +170.0 degC. Outside that
+range the firmware stores a "sensor fault" sentinel (0x8000 low / 0x8001 high);
+here such a value simply decodes to nothing (the entity goes unavailable).
 
-    x       = ln(adc / (1023 - adc))          # = ln(R_thermistor / R_fixed)
-    1/T[K]  = c0 + c1*x + c2*x^2 + c3*x^3     # Steinhart-Hart style
-    degC    = 1/T[K] - 273.15
+Three slots are digital protection inputs instead of thermistors, with the
+firmware's thresholds ("raw > 300" / "raw < 300"):
 
-adc == 1023 is a full-scale reading, i.e. an OPEN CIRCUIT (sensor not fitted).
-adc == 1 is a digital flag, not a temperature. Both decode to None.
+* 0x93 slot 0, raw < 300 -> HP (high pressure) alarm input
+* 0x91 slot 7, raw > 300 -> LP (low pressure) alarm input
+* 0x92 slot 0, raw > 300 -> TB (temperature limiter) alarm input
 """
 
 from __future__ import annotations
 
-import math
-
-from .fields import FIELD_SPECS, NTC_COEFFICIENTS
+from .fields import FIELD_SPECS
+from .ntc_table import NTC_X10
 from .protocol import Frame
 
 ADC_MAX = 1023
 
-# Anything outside this decodes to None: real sensors on this pump span roughly
-# -30..+120 degC, and the out-of-band raw values (1, 1023) land far outside it.
-MIN_CELSIUS = -60.0
-MAX_CELSIUS = 160.0
+# Firmware range check (FUN_20117D04): lo = -600, hi = 1700 (x10).
+MIN_X10 = -600
+MAX_X10 = 1700
+
+DIGITAL_THRESHOLD = 300
 
 
-def ntc_to_celsius(adc: int, coefficients: tuple[float, ...]) -> float | None:
-    """Convert a raw 10-bit NTC divider reading to degrees Celsius."""
-    if not 0 < adc < ADC_MAX:
+def ntc_to_celsius(adc: int) -> float | None:
+    """Convert a raw 10-bit NTC divider reading to degrees Celsius.
+
+    Table lookup, no fitting. ``None`` for a raw value outside 0..1023 or whose
+    temperature is outside -60.0..+170.0 degC (the firmware's fault sentinels).
+    """
+    if not 0 <= adc <= ADC_MAX:
         return None
-    x = math.log(adc / (ADC_MAX - adc))
-    inv_kelvin = sum(c * x**i for i, c in enumerate(coefficients))
-    if inv_kelvin <= 0:
+    x10 = NTC_X10[adc]
+    if not MIN_X10 <= x10 <= MAX_X10:
         return None
-    celsius = 1.0 / inv_kelvin - 273.15
-    if not MIN_CELSIUS <= celsius <= MAX_CELSIUS:
-        return None
-    return celsius
+    return x10 / 10
 
 
 def decode_adc(data: bytes) -> list[int]:
@@ -48,10 +52,10 @@ def decode_adc(data: bytes) -> list[int]:
 def decode_frame(frame: Frame) -> dict[str, float | int]:
     """Decode every field defined for this frame's address/direction/command.
 
-    Fields whose sensor reads open-circuit, or whose value is otherwise out of
-    range, are omitted rather than reported as a bogus number.
+    Fields whose sensor reads out of range are omitted rather than reported
+    as a bogus number.
     """
-    if frame.address is None or not frame.checksum_ok:
+    if frame.address is None or not frame.checksum_ok or frame.acked is False:
         return {}
 
     adc: list[int] | None = None
@@ -65,15 +69,23 @@ def decode_frame(frame: Frame) -> dict[str, float | int]:
         ):
             continue
 
-        if spec.kind == "ntc":
+        if spec.kind in ("ntc", "din_gt", "din_lt", "adc"):
             if adc is None:
                 adc = decode_adc(frame.data)
             if spec.index >= len(adc):
                 continue
-            celsius = ntc_to_celsius(adc[spec.index], NTC_COEFFICIENTS)
-            if celsius is None:
-                continue
-            values[spec.field_id] = celsius
+            raw = adc[spec.index]
+            if spec.kind == "ntc":
+                celsius = ntc_to_celsius(raw)
+                if celsius is None:
+                    continue
+                values[spec.field_id] = celsius
+            elif spec.kind == "din_gt":
+                values[spec.field_id] = int(raw > DIGITAL_THRESHOLD)
+            elif spec.kind == "din_lt":
+                values[spec.field_id] = int(raw < DIGITAL_THRESHOLD)
+            else:
+                values[spec.field_id] = raw
         else:
             if spec.index >= len(frame.data):
                 continue

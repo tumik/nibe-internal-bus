@@ -71,6 +71,23 @@
       "relays_raw": { "name": "Relay bitmask (PCA-Base)" },
       "relays_raw_byte1": { "name": "Relay bitmask byte 1" },
       "gp1_duty_raw": { "name": "GP1 raw duty byte" },
+      "compressor_state": {
+        "name": "Compressor state (soft starter)",
+        "state": {
+          "stopped": "Stopped",
+          "running": "Running",
+          "soft_start": "Soft start",
+          "phase_1_missing": "Phase 1 missing",
+          "phase_2_missing": "Phase 2 missing",
+          "phase_3_missing": "Phase 3 missing",
+          "phase_sequence": "Incorrect phase sequence",
+          "motor_protection": "Motor protection",
+          "soft_start_overheat": "Soft starter overheated",
+          "phase_fault": "Phase fault"
+        }
+      },
+      "adc_92_3": { "name": "Raw input 0x92 word 3" },
+      "adc_93_1": { "name": "Raw input 0x93 word 1" },
       "status_96_raw": { "name": "Status reply 0x96" },
       "status_99_raw": { "name": "Status reply 0x99" }
     },
@@ -79,10 +96,17 @@
       "heating_pump": { "name": "Heating circulation pump" },
       "brine_pump": { "name": "Brine pump" },
       "electrical_addition": { "name": "Electrical addition" },
+      "hot_water_circulation": { "name": "Hot water circulation" },
+      "hp_alarm": { "name": "High pressure switch alarm" },
+      "lp_alarm": { "name": "Low pressure switch alarm" },
+      "tb_alarm": { "name": "Temperature limiter alarm" },
+      "compressor_fault": { "name": "Compressor protection fault" },
       "addition_relay_1kw": { "name": "Electrical addition relay 1 kW" },
       "addition_relay_2kw_a": { "name": "Electrical addition relay 2 kW A" },
       "addition_relay_2kw_b": { "name": "Electrical addition relay 2 kW B" },
       "addition_relay_2kw_c": { "name": "Electrical addition relay 2 kW C" },
+      "relay_k5": { "name": "Relay K5 (AA1)" },
+      "relay_k7": { "name": "Relay K7 (AA1)" },
       "relays_byte1_bit2": { "name": "Relay byte 1 bit 2" },
       "relays_byte1_bit3": { "name": "Relay byte 1 bit 3" }
     }

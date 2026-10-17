@@ -45,6 +45,9 @@ FIELD_THREE_WAY_VALVE = "00F5_MASTER_55_byte0bit3"
 FIELD_RELAYS_RAW_BYTE1 = "00F5_MASTER_55_byte1"
 FIELD_RELAYS_BYTE1_BIT2 = "00F5_MASTER_55_byte1bit2"
 FIELD_RELAYS_BYTE1_BIT3 = "00F5_MASTER_55_byte1bit3"
+FIELD_HOT_WATER_CIRCULATION = "00F5_MASTER_55_byte1bit4"
+FIELD_RELAY_K5 = "00F5_MASTER_55_byte0bit5"
+FIELD_RELAY_K7 = "00F5_MASTER_55_byte0bit7"
 
 # The electrical addition relays, named by the order the pump steps them in:
 # 1 kW, 2 kW, 2+1, 2+2, 2+2+1, 2+2+2 kW.
@@ -65,6 +68,30 @@ ADDITION_RELAY_KW = {
 FIELD_GP1_DUTY = "00F5_MASTER_A0_byte0"
 FIELD_GP2_DUTY = "00F5_MASTER_A0_byte1"
 
+# Merged PCA-Base status code (reply to 0x96 *and* 0x99, firmware REG 43443).
+FIELD_STATUS_CODE = "00F5_SLAVE_status_code"
+FIELD_HP_ALARM = "00F5_SLAVE_93_din_lt0"
+FIELD_LP_ALARM = "00F5_SLAVE_91_din_gt7"
+FIELD_TB_ALARM = "00F5_SLAVE_92_din_gt0"
+FIELD_ADC_92_3 = "00F5_SLAVE_92_adc3"
+FIELD_ADC_93_1 = "00F5_SLAVE_93_adc1"
+
+# Meaning of the PCA-Base status code. 5/6 are observed normal states; the
+# others are the values the display firmware turns into compressor alarms.
+STATUS_STATES = {
+    5: "stopped",
+    6: "running",
+    7: "soft_start",
+    1: "phase_1_missing",
+    2: "phase_2_missing",
+    3: "phase_3_missing",
+    4: "phase_sequence",
+    8: "motor_protection",
+    9: "soft_start_overheat",
+    0xFE: "phase_fault",
+}
+STATUS_FAULT_CODES = frozenset({1, 2, 3, 4, 8, 9, 0xFE})
+
 FIELD_STATUS_96 = "00F5_SLAVE_96_byte0"
 FIELD_STATUS_99 = "00F5_SLAVE_99_byte0"
 
@@ -83,9 +110,16 @@ DISCRETE_FIELDS = frozenset(
         FIELD_RELAYS_RAW_BYTE1,
         FIELD_RELAYS_BYTE1_BIT2,
         FIELD_RELAYS_BYTE1_BIT3,
+        FIELD_HOT_WATER_CIRCULATION,
+        FIELD_RELAY_K5,
+        FIELD_RELAY_K7,
         *ADDITION_RELAY_KW,
         FIELD_ADDITION_POWER,
         FIELD_STATUS_96,
         FIELD_STATUS_99,
+        FIELD_STATUS_CODE,
+        FIELD_HP_ALARM,
+        FIELD_LP_ALARM,
+        FIELD_TB_ALARM,
     }
 )
