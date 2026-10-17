@@ -1,5 +1,26 @@
 # Nibe Internal Bus for Home Assistant
 
+> [!IMPORTANT]
+> **This project is no longer actively maintained.** For new installations, use the USB-based
+> version instead: the gateway **[nibe-service-usb](https://github.com/tumik/nibe-service-usb)**
+> together with its Home Assistant integration
+> **[ha-nibe-service-usb](https://github.com/tumik/ha-nibe-service-usb)**.
+>
+> - **Easier to set up.** There is no need to open the pump and tap into its internal interfaces:
+>   the gateway uses the external service USB port that is accessible on the front panel, with a
+>   plain USB cable to a small Linux computer.
+> - **Much more data.** It also reads registers inside the display unit, for example degree
+>   minutes and the calculated flow temperature, which the internal bus does not carry, plus
+>   settings, counters and alarms.
+> - **Control, not only monitoring.** It allows low-level control of the pump: hot water comfort
+>   mode, an immediate periodic hot water increase, and holding space heating on or off.
+> - **Room to grow.** The USB project already has the most important sensors and controls, and
+>   the service interface gives full visibility and control of all sensors and settings, so the
+>   software can easily be extended to whatever you need.
+>
+> This repository stays available as is, for existing installations and as documentation of the
+> internal bus protocol.
+
 A local-push custom integration that reads the **internal RS-485 bus** of a Nibe
 heat pump — the link the pump's own components use to talk to each other — and
 exposes what it carries as Home Assistant entities.
